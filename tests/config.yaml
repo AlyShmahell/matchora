@@ -1,0 +1,9 @@
+llama:
+  llm_base_url: "http://stub:8080/v1"
+providers:
+  tvmaze:
+    base: "http://stub:8080"
+  jikan:
+    base: "http://stub:8080"
+  omdb:
+    base: "http://stub:8080"

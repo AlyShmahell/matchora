@@ -1,0 +1,6 @@
+FROM docker.io/library/alpine:3.24
+RUN apk add --no-cache curl
+COPY smoke /smoke
+COPY live /live
+COPY fixtures /fixtures
+RUN chmod +x /smoke/run /live/run

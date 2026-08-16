@@ -1,0 +1,113 @@
+#!/bin/sh
+set -eu
+URL="${MATCHORA_URL:-http://matchora:7680}"
+
+i=0
+while [ "$i" -lt 90 ]; do
+  if curl -sf "$URL/health" | grep -q '"healthy"'; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+
+body="$(curl -sf "$URL/health")"
+echo "$body" | grep -q '"healthy":true'
+echo "$body" | grep -q '"version"'
+
+html="$(curl -sf "$URL/")"
+echo "$html" | grep -qi "matchora"
+echo "$html" | grep -qi "admin"
+echo "$html" | grep -q "chip-total"
+echo "$html" | grep -q "chip-success"
+echo "$html" | grep -q "chip-manual"
+echo "$html" | grep -q "chip-pending"
+echo "$html" | grep -q "chip-failure"
+echo "$html" | grep -q "chip-group"
+echo "$html" | grep -q "model-chips"
+echo "$html" | grep -q 'id="waits"'
+echo "$html" | grep -q 'id="clear"'
+echo "$html" | grep -q "<progress"
+
+resp="$(curl -sS -w '\n%{http_code}' -F "file=@/fixtures/titles.csv;type=text/csv" "$URL/v1/ingest")"
+code="$(printf '%s\n' "$resp" | tail -n 1)"
+ingested="$(printf '%s\n' "$resp" | sed '$d')"
+echo "$ingested" | grep -qv 'permission denied'
+[ "$code" = "202" ]
+echo "$ingested" | grep -q '"status":"pending"'
+
+jobs=""
+i=0
+while [ "$i" -lt 40 ]; do
+  jobs="$(curl -sf "$URL/v1/jobs")"
+  if echo "$jobs" | grep -q '"status":"matched"' \
+    && echo "$jobs" | grep -q '"ranker":"embed"' \
+    && echo "$jobs" | grep -q '"provider":"tvmaze"' \
+    && echo "$jobs" | grep -q '"provider":"jikan"' \
+    && ! echo "$jobs" | grep -q '"status":"pending"'; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+echo "$jobs" | grep -q '"status":"matched"'
+echo "$jobs" | grep -q '"ranker":"embed"'
+echo "$jobs" | grep -q '"provider":"tvmaze"'
+echo "$jobs" | grep -q '"provider":"jikan"'
+
+scan="$(curl -sS -w '\n%{http_code}' -H 'Content-Type: application/json' \
+  -d '{"path":"/home/matchora/.oraora/matchora/library"}' "$URL/v1/scan")"
+scode="$(printf '%s\n' "$scan" | tail -n 1)"
+sbody="$(printf '%s\n' "$scan" | sed '$d')"
+[ "$scode" = "202" ]
+echo "$sbody" | grep -q '"files"'
+echo "$sbody" | grep -qE '"files":\s*[1-9]'
+scanst="$(curl -sf "$URL/v1/scan/status")"
+echo "$scanst" | grep -q '"files"'
+echo "$scanst" | grep -qE '"files":\s*[1-9]'
+
+i=0
+while [ "$i" -lt 40 ]; do
+  jobs="$(curl -sf "$URL/v1/jobs")"
+  if echo "$jobs" | grep -q '"source":"scan"' \
+    && echo "$jobs" | grep -q '"title":"Girls"' \
+    && echo "$jobs" | grep -q '"title":"Cowboy Bebop"' \
+    && echo "$jobs" | grep -q '"status":"matched"' \
+    && echo "$jobs" | grep -q '"ranker":"embed"' \
+    && ! echo "$jobs" | grep -q '"status":"pending"'; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+echo "$jobs" | grep -q '"source":"scan"'
+echo "$jobs" | grep -q '"title":"Girls"'
+echo "$jobs" | grep -q '"title":"Cowboy Bebop"'
+echo "$jobs" | grep -q '"ranker":"embed"'
+echo "$jobs" | grep -q '"status":"matched"'
+! echo "$jobs" | grep -q '"status":"pending"'
+
+curl -sf -X POST "$URL/v1/match" | grep -q '"status":"pending"'
+i=0
+while [ "$i" -lt 40 ]; do
+  jobs="$(curl -sf "$URL/v1/jobs")"
+  if echo "$jobs" | grep -q '"status":"matched"' && ! echo "$jobs" | grep -q '"status":"pending"'; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+echo "$jobs" | grep -q '"status":"matched"'
+
+retry="$(curl -sf -X POST "$URL/v1/retry")"
+echo "$retry" | grep -q '^\['
+jobs="$(curl -sf "$URL/v1/jobs")"
+echo "$jobs" | grep -q '"status":"matched"'
+! echo "$jobs" | grep -q '"status":"pending"'
+
+cleared="$(curl -sf -X DELETE "$URL/v1/jobs")"
+echo "$cleared" | grep -q '^\[\]'
+jobs="$(curl -sf "$URL/v1/jobs")"
+echo "$jobs" | grep -q '^\[\]'
+
+echo "smoke ok"

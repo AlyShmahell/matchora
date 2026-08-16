@@ -1,0 +1,91 @@
+services:
+  stub:
+    build:
+      context: ./stub
+      dockerfile: Containerfile
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/search/shows?q=girls"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  matchora:
+    build:
+      context: ../matchora
+      dockerfile: Containerfile
+    command:
+      - -config
+      - /home/matchora/.oraora/matchora/config/default.yaml
+    volumes:
+      - llama-cpp:/home/matchora/.oraora/matchora/llamacpp:z
+      - ./fixtures/library:/home/matchora/.oraora/matchora/library:z
+      - ./config.yaml:/run/matchora/config.yaml:z
+    tmpfs:
+      - /home/matchora/.oraora/matchora
+    depends_on:
+      stub:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7680/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 300s
+
+  check:
+    build:
+      context: ../matchora
+      dockerfile: Containerfile
+    volumes:
+      - ./image/run:/check:z
+    tmpfs:
+      - /home/matchora/.oraora/matchora
+    entrypoint: ["/bin/sh", "/check"]
+
+  unit:
+    image: docker.io/library/golang:1.26-bookworm
+    volumes:
+      - ../matchora:/src:z
+    working_dir: /src
+    command: ["go", "test", "-buildvcs=false", "./lib/llama", "./lib/match", "./lib/scan", "./lib/config", "./lib/jobs"]
+
+  tester:
+    build:
+      context: .
+      dockerfile: Containerfile
+    depends_on:
+      matchora:
+        condition: service_healthy
+    command: ["/smoke/run"]
+
+  matchora-live:
+    profiles: ["live"]
+    build:
+      context: ../matchora
+      dockerfile: Containerfile
+    command:
+      - -config
+      - /home/matchora/.oraora/matchora/config/default.yaml
+    volumes:
+      - llama-cpp:/home/matchora/.oraora/matchora/llamacpp:z
+    tmpfs:
+      - /home/matchora/.oraora/matchora
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7680/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 300s
+
+  live:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: Containerfile
+    depends_on:
+      matchora-live:
+        condition: service_healthy
+    command: ["/live/run"]
+
+volumes:
+  llama-cpp:

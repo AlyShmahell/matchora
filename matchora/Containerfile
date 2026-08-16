@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1
+# Build context: matchora/
+
+FROM docker.io/library/golang:1.26-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY app ./app
+COPY lib ./lib
+COPY gui ./gui
+RUN CGO_ENABLED=0 GOFLAGS=-buildvcs=false go mod tidy \
+  && go build -ldflags="-s -w" -o /out/matchora ./app
+
+FROM docker.io/library/debian:trixie-slim
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates wget libgomp1 libcurl4 libvulkan1 mesa-vulkan-drivers \
+  && rm -rf /var/lib/apt/lists/* \
+  && useradd -u 1000 -m -d /home/matchora matchora
+COPY --from=build /out/matchora /usr/local/bin/matchora
+COPY share/config /usr/share/matchora/config
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+EXPOSE 7680
+HEALTHCHECK --interval=5s --timeout=3s --retries=36 --start-period=300s \
+  CMD wget -qO- http://127.0.0.1:7680/health
+ENTRYPOINT ["/entrypoint.sh"]

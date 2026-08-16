@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Build and serve matchora.
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR"
+
+compose() {
+  if command -v podman-compose >/dev/null 2>&1; then
+    podman-compose -f compose.yaml "$@"
+  elif command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+    podman compose -f compose.yaml "$@"
+  elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    docker compose -f compose.yaml "$@"
+  else
+    echo "error: need podman-compose, podman compose, or docker compose" >&2
+    exit 1
+  fi
+}
+
+compose up --build --force-recreate "$@"

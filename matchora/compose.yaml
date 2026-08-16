@@ -1,0 +1,25 @@
+services:
+  matchora:
+    build:
+      context: .
+      dockerfile: Containerfile
+    command:
+      - -config
+      - /home/matchora/.oraora/matchora/config/default.yaml
+    ports:
+      - "127.0.0.1:7680:7680"
+    volumes:
+      - ../data:/home/matchora/.oraora/matchora:z
+      - /mnt/microsd/media:/mnt/microsd/media:ro
+    security_opt:
+      - label=disable
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - keep-groups
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7680/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 300s

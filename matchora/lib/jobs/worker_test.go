@@ -1,0 +1,167 @@
+package jobs
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/alyshmahell/matchora/lib/config"
+	"github.com/alyshmahell/matchora/lib/match"
+)
+
+func TestWorkerRunsPendingJobsInParallel(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var once sync.Once
+	unlock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unlock)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-release
+		_ = json.NewEncoder(w).Encode([]any{
+			map[string]any{"score": 1, "show": map[string]any{"id": 1, "name": "Girls", "premiered": "2012", "url": "http://t"}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{
+		HTTP:  config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 2000},
+		Match: config.Match{MinScore: 0.72, MinMargin: 0.04, Workers: 2},
+		Providers: map[string]config.Provider{
+			"tvmaze": {
+				Types:  []string{"tv", ""},
+				Base:   srv.URL,
+				URL:    "{base}/search/shows",
+				Query:  map[string]string{"q": "{title}"},
+				Items:  "$",
+				Fields: map[string]string{"id": "show.id", "title": "show.name", "year": "show.premiered", "url": "show.url"},
+			},
+		},
+	}
+	store := New(t.TempDir())
+	if err := store.ReplaceAll([]match.Job{
+		{ID: "a", Title: "Girls", Status: "pending"},
+		{ID: "b", Title: "Girls", Status: "pending"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := NewWorker(cfg, store)
+	w.Kick()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("jobs did not overlap")
+		}
+	}
+	open := 0
+	for _, wait := range w.Waits() {
+		if wait.Name == "tvmaze" && wait.Until == nil {
+			open++
+		}
+	}
+	if open != 2 {
+		t.Fatalf("running waits=%d log=%+v", open, w.Waits())
+	}
+	unlock()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		list, err := store.List()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ok := 0
+		for _, j := range list {
+			if j.Status == "matched" && j.Match != nil {
+				ok++
+			}
+		}
+		if ok == 2 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	list, _ := store.List()
+	t.Fatalf("jobs=%+v", list)
+}
+
+func TestWorkerWritesJobBeforeBatchFinishes(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	unlock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unlock)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		if q == "Slow" {
+			started <- struct{}{}
+			<-release
+			_ = json.NewEncoder(w).Encode([]any{
+				map[string]any{"score": 1, "show": map[string]any{"id": 2, "name": "Slow", "premiered": "2012", "url": "http://s"}},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]any{
+			map[string]any{"score": 1, "show": map[string]any{"id": 1, "name": "Girls", "premiered": "2012", "url": "http://t"}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{
+		HTTP:  config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 2000},
+		Match: config.Match{MinScore: 0.72, MinMargin: 0.04, Workers: 2},
+		Providers: map[string]config.Provider{
+			"tvmaze": {
+				Types:  []string{"tv", ""},
+				Base:   srv.URL,
+				URL:    "{base}/search/shows",
+				Query:  map[string]string{"q": "{title}"},
+				Items:  "$",
+				Fields: map[string]string{"id": "show.id", "title": "show.name", "year": "show.premiered", "url": "show.url"},
+			},
+		},
+	}
+	store := New(t.TempDir())
+	if err := store.ReplaceAll([]match.Job{
+		{ID: "fast", Title: "Girls", Status: "pending"},
+		{ID: "slow", Title: "Slow", Status: "pending"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewWorker(cfg, store).Kick()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("slow job did not start")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		list, err := store.List()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fast, slow match.Job
+		for _, j := range list {
+			if j.ID == "fast" {
+				fast = j
+			}
+			if j.ID == "slow" {
+				slow = j
+			}
+		}
+		if fast.Status == "matched" && slow.Status == "pending" {
+			unlock()
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	unlock()
+	list, _ := store.List()
+	t.Fatalf("expected fast matched while slow pending, jobs=%+v", list)
+}

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>matchora admin</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="hdr">
+    <div class="logo" aria-hidden="true"></div>
+    <h1>matchora</h1>
+    <span class="badge">admin</span>
+    <span id="model-chips" class="model-chips"></span>
+    <span id="status" class="status down" data-state="down">down</span>
+  </header>
+  <main class="page">
+    <section class="card chrome-card">
+      <section class="chrome">
+        <form id="upload" class="panel">
+          <h2>upload</h2>
+          <p class="hint">title-row file (csv / json) → POST /v1/ingest</p>
+          <div class="row">
+            <input type="file" name="file" accept=".csv,.json,text/csv,application/json">
+            <button type="submit">ingest</button>
+          </div>
+          <p id="upload-status" class="hint" hidden></p>
+        </form>
+        <div class="panel">
+          <h2>folder picker</h2>
+          <p class="hint">server paths under browse root → POST /v1/scan</p>
+          <div class="row">
+            <code id="cwd" class="cwd"></code>
+            <button type="button" id="up" disabled>up</button>
+            <button type="button" id="scan">scan this path</button>
+          </div>
+          <ul id="dirs" class="dirs"></ul>
+          <p id="scan-status" class="hint" hidden></p>
+        </div>
+      </section>
+    </section>
+    <div class="results-grid">
+      <section class="card results">
+        <div class="jobs-head">
+          <h2>jobs</h2>
+          <span id="chip-total" class="chip chip-total">total 0</span>
+          <span id="chip-success" class="chip chip-success">success 0</span>
+          <span id="chip-manual" class="chip chip-manual">manual 0</span>
+          <span id="chip-pending" class="chip chip-pending">pending 0</span>
+          <span id="chip-failure" class="chip chip-failure">failure 0</span>
+          <span id="chip-group" class="chip chip-group" hidden>group 0/0</span>
+          <progress id="scan-progress" max="1" value="0" hidden></progress>
+          <button type="button" id="retry">retry errors</button>
+          <button type="button" id="clear">clear</button>
+          <span id="retry-status" class="hint" hidden></span>
+        </div>
+        <p id="empty" class="empty">no scan / ingest → match results yet</p>
+        <div id="jobs"></div>
+      </section>
+      <section class="card matching">
+        <h2>matching</h2>
+        <p id="waits-empty" class="empty">no waits yet</p>
+        <div id="waits"></div>
+      </section>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

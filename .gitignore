@@ -26,7 +26,12 @@ go.work.sum
 
 # env file
 .env
+matchora/.env
+
+# Runtime data
+/data/
+!data/.gitkeep
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/

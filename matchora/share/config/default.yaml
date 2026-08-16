@@ -1,0 +1,63 @@
+http:
+  addr: ":7680"
+  timeout_ms: 60000
+  retries: 3
+  backoff_ms: [1000, 2000, 4000]
+  provider_timeout_ms: 10000
+data_dir: /home/matchora/.oraora/matchora
+browse_root: /home/matchora/.oraora/matchora
+version: "0.0.1"
+ranker: embed
+match:
+  min_score: 0.72
+  min_margin: 0.04
+  min_hits: 1
+  workers: 8
+  cooldown_fails: 2
+  cooldown_ms: 3600000
+llama:
+  base_url: "http://127.0.0.1:8080/v1"
+  model: ""
+  llm_base_url: "http://127.0.0.1:8081/v1"
+  bin_dir: llamacpp/bin
+  models_dir: llamacpp/models
+  tarball_file: llama-b10453-bin-ubuntu-vulkan-x64.tar.gz
+  tarball_url: "https://github.com/ggml-org/llama.cpp/releases/download/b10453/llama-b10453-bin-ubuntu-vulkan-x64.tar.gz"
+  model_file: all-MiniLM-L6-v2-Q4_K_M.gguf
+  model_url: "https://huggingface.co/second-state/All-MiniLM-L6-v2-Embedding-GGUF/resolve/main/all-MiniLM-L6-v2-Q4_K_M.gguf"
+  instruct_file: Qwen_Qwen3.5-0.8B-Q4_K_M.gguf
+  instruct_url: "https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF/resolve/main/Qwen_Qwen3.5-0.8B-Q4_K_M.gguf"
+  gpu_layers: 999
+providers:
+  tvmaze:
+    types: [tv, ""]
+    base: "https://api.tvmaze.com"
+    url: "{base}/search/shows"
+    query: { q: "{title}" }
+    items: "$"
+    fields: { id: show.id, title: show.name, year: show.premiered, url: show.url, synopsis: show.summary, poster: show.image.medium }
+    year: prefix4
+    episode:
+      url: "{base}/shows/{id}/episodebynumber"
+      query: { season: "{season}", number: "{episode}" }
+      fields: { id: id, title: name, year: airdate, url: url }
+      year: prefix4
+  jikan:
+    types: [anime, movie]
+    base: "https://api.jikan.moe/v4"
+    url: "{base}/anime"
+    query: { q: "{title}", limit: "8" }
+    items: data
+    fields: { id: mal_id, title: title, year: year, url: url, synopsis: synopsis, poster: images.jpg.image_url }
+    min_interval_ms: 4000
+    defer: true
+  omdb:
+    types: [movie, tv, ""]
+    require: api_key
+    base: "https://www.omdbapi.com"
+    url: "{base}"
+    query: { apikey: "{api_key}", s: "{title}", type: "{type_param}" }
+    type_params: { movie: movie, tv: series }
+    items: Search
+    fields: { id: imdbID, title: Title, year: Year, url: imdbID, poster: Poster }
+    url_prefix: "https://www.imdb.com/title/"

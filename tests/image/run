@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+DATA="/home/matchora/.oraora/matchora"
+mkdir -p "$DATA"
+chown -R matchora:matchora "$DATA"
+runuser -u matchora -- touch "$DATA/jobs.json.tmp"
+runuser -u matchora -- rm "$DATA/jobs.json.tmp"
+ver="$(dpkg-query -W -f='${Version}' mesa-vulkan-drivers)"
+echo "$ver" | grep -qE '^(2[4-9]|[3-9][0-9])\.'
+ls /usr/share/vulkan/icd.d/radeon_icd*.json >/dev/null
+echo "image ok"

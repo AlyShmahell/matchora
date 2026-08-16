@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR"
+
+if ! command -v podman >/dev/null 2>&1; then
+  echo "error: podman is required for tests" >&2
+  exit 1
+fi
+
+compose() {
+  if command -v podman-compose >/dev/null 2>&1; then
+    podman-compose -f compose.yaml "$@"
+  else
+    podman compose -f compose.yaml "$@"
+  fi
+}
+
+# Keep llamacpp volume so the runtime tarball and GGUFs are not re-downloaded every run.
+compose down --remove-orphans >/dev/null 2>&1 || true
+compose build
+echo "==> check"
+compose run --rm check
+echo "==> unit"
+compose run --rm unit
+echo "==> smoke"
+compose run --rm tester
+echo "==> live"
+if [[ "${MATCHORA_LIVE:-}" == "1" ]]; then
+  compose --profile live run --rm live
+else
+  echo "live skipped (set MATCHORA_LIVE=1 to hit real TVMaze/Jikan)"
+fi
+compose down --remove-orphans >/dev/null 2>&1 || true
+echo "==> tests passed"

@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+URL="http://matchora-live:7680"
+
+i=0
+while [ "$i" -lt 40 ]; do
+  if curl -sf "$URL/health" | grep -q '"healthy"'; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+
+curl -sf -H "Content-Type: application/json" -d '[{"title":"Girls","year":"2012","type":"tv"}]' "$URL/v1/ingest" | grep -q '"status":"pending"'
+i=0
+while [ "$i" -lt 40 ]; do
+  jobs="$(curl -sf "$URL/v1/jobs")"
+  if echo "$jobs" | grep -q '"status":"matched"' && ! echo "$jobs" | grep -q '"status":"pending"'; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+echo "$jobs" | grep -q '"status":"matched"'
+echo "live ok"
