@@ -132,9 +132,11 @@ func TestCircuitExpiresAfterTTL(t *testing.T) {
 	}
 }
 
-func TestCircuitIgnoresCanceledContext(t *testing.T) {
+func TestCircuitIgnoresExpiredContext(t *testing.T) {
+	var n atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusGatewayTimeout)
+		n.Add(1)
+		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
 	cfg := always504Config(srv.URL)
@@ -142,13 +144,52 @@ func TestCircuitIgnoresCanceledContext(t *testing.T) {
 	cool := NewCircuit()
 	ctx, cancel := context.WithCancel(WithCircuit(context.Background(), cool))
 	cancel()
-	collectProviders(ctx, cfg, newHTTP(cfg), Job{Title: "Girls"}, true, false)
-	if cool.Cooling("slow") {
-		t.Fatal("canceled ctx should not trip cooldown")
+	job := Job{Title: "Girls"}
+	httpc := newHTTP(cfg)
+	for i := 0; i < 2; i++ {
+		cands, errs, ok := collectProviders(ctx, cfg, httpc, job, true, false)
+		if len(cands) != 0 || ok != 0 || len(errs) == 0 {
+			t.Fatalf("fail %d: cands=%v ok=%d errs=%v", i, cands, ok, errs)
+		}
 	}
-	cool.Fail("slow", 2, time.Hour)
-	cool.Fail("slow", 2, time.Hour)
+	if cool.Cooling("slow") {
+		t.Fatal("parent deadline must not cool")
+	}
+}
+
+func TestCircuitAttemptTimeoutWhileParentLive(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	cfg := always504Config(srv.URL)
+	cfg.HTTP.Retries = 1
+	cfg.HTTP.ProviderTimeoutMS = 30
+	cool := NewCircuit()
+	ctx := WithCircuit(context.Background(), cool)
+	job := Job{Title: "Girls"}
+	httpc := newHTTP(cfg)
+	for i := 0; i < 2; i++ {
+		cands, errs, ok := collectProviders(ctx, cfg, httpc, job, true, false)
+		if len(cands) != 0 || ok != 0 || len(errs) == 0 {
+			t.Fatalf("fail %d: cands=%v ok=%d errs=%v", i, cands, ok, errs)
+		}
+	}
 	if !cool.Cooling("slow") {
-		t.Fatal("two real fails should cool")
+		t.Fatal("live-parent attempt timeout should cool")
+	}
+	hits := n.Load()
+	cands, errs, ok := collectProviders(ctx, cfg, httpc, job, true, false)
+	if len(cands) != 0 || ok != 0 {
+		t.Fatalf("cooled: cands=%v ok=%d", cands, ok)
+	}
+	if len(errs) != 1 || errs[0] != "slow: cooldown" {
+		t.Fatalf("errs=%v", errs)
+	}
+	if n.Load() != hits {
+		t.Fatalf("provider called during cooldown: before=%d after=%d", hits, n.Load())
 	}
 }

@@ -15,6 +15,9 @@ const runOverlay = "/run/matchora/config.yaml"
 const fallbackPrompt = `You group one library folder or file into unique titles. Return JSON only.
 Return JSON {"shows":[{"title":"","year":""}]} only.`
 
+const fallbackIngestPrompt = `You map CSV headers to title fields. Return JSON only.
+Return JSON {"columns":{"title":"","year":"","type":"","season":"","episode":"","imdb":""}} only.`
+
 type Config struct {
 	HTTP       HTTP                `yaml:"http"`
 	DataDir    string              `yaml:"data_dir"`
@@ -23,8 +26,15 @@ type Config struct {
 	Ranker     string              `yaml:"ranker"`
 	Match      Match               `yaml:"match"`
 	Llama      Llama               `yaml:"llama"`
+	Ingest     Ingest              `yaml:"ingest"`
 	Providers  map[string]Provider `yaml:"providers"`
 	ConfigPath string              `yaml:"-"`
+}
+
+type Ingest struct {
+	SampleRows int               `yaml:"sample_rows"`
+	Aliases    map[string]string `yaml:"aliases"`
+	Types      map[string]string `yaml:"types"`
 }
 
 type HTTP struct {
@@ -36,12 +46,14 @@ type HTTP struct {
 }
 
 type Match struct {
-	MinScore      float64 `yaml:"min_score"`
-	MinMargin     float64 `yaml:"min_margin"`
-	MinHits       int     `yaml:"min_hits"`
-	Workers       int     `yaml:"workers"`
-	CooldownFails int `yaml:"cooldown_fails"`
-	CooldownMS    int `yaml:"cooldown_ms"`
+	MinScore      float64                       `yaml:"min_score"`
+	SoloMinScore  float64                       `yaml:"solo_min_score"`
+	MinMargin     float64                       `yaml:"min_margin"`
+	MinHits       int                           `yaml:"min_hits"`
+	Workers       int                           `yaml:"workers"`
+	CooldownFails int                           `yaml:"cooldown_fails"`
+	CooldownMS    int                           `yaml:"cooldown_ms"`
+	Prefer        map[string]map[string]string  `yaml:"prefer"`
 }
 
 type Llama struct {
@@ -138,6 +150,23 @@ func (c Config) Prompt() string {
 	return fallbackPrompt
 }
 
+func (c Config) IngestPrompt() string {
+	if c.ConfigPath != "" {
+		p := filepath.Join(filepath.Dir(c.ConfigPath), "ingest.md")
+		if b, err := os.ReadFile(p); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+			return string(b)
+		}
+	}
+	return fallbackIngestPrompt
+}
+
+func (c Config) IngestSampleRows() int {
+	if c.Ingest.SampleRows < 1 {
+		return 3
+	}
+	return c.Ingest.SampleRows
+}
+
 func (c Config) LlamaBinDir() string {
 	return c.llamaPath(c.Llama.BinDir, "llamacpp/bin")
 }
@@ -166,6 +195,13 @@ func (c Config) MatchWorkers() int {
 		return 1
 	}
 	return c.Match.Workers
+}
+
+func (c Config) MatchSoloScore() float64 {
+	if c.Match.SoloMinScore <= 0 {
+		return c.Match.MinScore
+	}
+	return c.Match.SoloMinScore
 }
 
 func (c Config) MatchMinHits() int {

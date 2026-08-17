@@ -119,7 +119,7 @@ func main() {
 			return
 		}
 		defer body.Close()
-		rows, err := ingest.Parse(body, name, ct)
+		rows, err := ingest.Parse(r.Context(), cfg, body, name, ct)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return

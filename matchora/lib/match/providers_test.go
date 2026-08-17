@@ -245,53 +245,67 @@ func TestTypedSkipsUnwantedProviders(t *testing.T) {
 	}
 }
 
-func TestTypedFallsBackWhenWantedEmpty(t *testing.T) {
-	var tv atomic.Int32
-	tvmaze := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tv.Add(1)
-		_ = json.NewEncoder(w).Encode([]any{
-			map[string]any{"score": 1, "show": map[string]any{"id": 1, "name": "Girls", "premiered": "2012", "url": "http://t"}},
+func TestTypedMovieNeverHitsJikan(t *testing.T) {
+	var jk atomic.Int32
+	omdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Search": []any{map[string]any{"imdbID": "tt1", "Title": "Dune", "Year": "2021"}},
 		})
 	}))
-	t.Cleanup(tvmaze.Close)
+	t.Cleanup(omdb.Close)
 	jikan := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{}})
+		jk.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []any{map[string]any{"mal_id": 1, "title": "Dune", "year": 2021, "url": "http://j"}},
+		})
 	}))
 	t.Cleanup(jikan.Close)
 	cfg := config.Config{
 		HTTP: config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 1000},
 		Providers: map[string]config.Provider{
-			"tvmaze": {
-				Types:  []string{"tv", ""},
-				Base:   tvmaze.URL,
-				URL:    "{base}/search/shows",
-				Query:  map[string]string{"q": "{title}"},
-				Items:  "$",
-				Fields: map[string]string{"id": "show.id", "title": "show.name", "year": "show.premiered", "url": "show.url"},
+			"omdb": {
+				Types:  []string{"movie", "tv", ""},
+				Base:   omdb.URL,
+				URL:    "{base}",
+				Query:  map[string]string{"s": "{title}"},
+				Items:  "Search",
+				Fields: map[string]string{"id": "imdbID", "title": "Title", "year": "Year", "url": "imdbID"},
 			},
 			"jikan": {
-				Types:  []string{"anime", "movie"},
+				Types:  []string{"anime"},
 				Base:   jikan.URL,
 				URL:    "{base}/anime",
 				Query:  map[string]string{"q": "{title}"},
 				Items:  "data",
 				Fields: map[string]string{"id": "mal_id", "title": "title", "year": "year", "url": "url"},
+				Defer:  true,
 			},
 		},
 	}
-	cands, err := searchProviders(context.Background(), cfg, newHTTP(cfg), Job{Title: "Girls", Type: "movie"})
+	job := Job{Title: "Dune", Type: "movie"}
+	cands, err := searchProviders(context.Background(), cfg, newHTTP(cfg), job)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tv.Load() != 1 {
-		t.Fatalf("tvmaze hits=%d", tv.Load())
+	if jk.Load() != 0 {
+		t.Fatalf("jikan hits=%d", jk.Load())
 	}
-	if len(cands) != 1 || cands[0].Provider != "tvmaze" {
+	if len(cands) != 1 || cands[0].Provider != "omdb" {
 		t.Fatalf("got %+v", cands)
+	}
+	slow, err := searchProvidersDefer(context.Background(), cfg, newHTTP(cfg), job, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jk.Load() != 0 {
+		t.Fatalf("deferred jikan hits=%d", jk.Load())
+	}
+	if len(slow) != 0 {
+		t.Fatalf("slow=%+v", slow)
 	}
 }
 
-func TestTypedFallsBackWhenWantedFails(t *testing.T) {
+func TestTypedDoesNotFallBackToUnlisted(t *testing.T) {
 	var tv atomic.Int32
 	tvmaze := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tv.Add(1)
@@ -316,7 +330,7 @@ func TestTypedFallsBackWhenWantedFails(t *testing.T) {
 				Fields: map[string]string{"id": "show.id", "title": "show.name", "year": "show.premiered", "url": "show.url"},
 			},
 			"jikan": {
-				Types:  []string{"anime", "movie"},
+				Types:  []string{"anime"},
 				Base:   jikan.URL,
 				URL:    "{base}/anime",
 				Query:  map[string]string{"q": "{title}"},
@@ -326,13 +340,13 @@ func TestTypedFallsBackWhenWantedFails(t *testing.T) {
 		},
 	}
 	cands, err := searchProviders(context.Background(), cfg, newHTTP(cfg), Job{Title: "Black Clover", Type: "anime"})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("expected wanted-provider error")
 	}
-	if tv.Load() != 1 {
+	if tv.Load() != 0 {
 		t.Fatalf("tvmaze hits=%d", tv.Load())
 	}
-	if len(cands) != 1 || cands[0].Provider != "tvmaze" {
+	if len(cands) != 0 {
 		t.Fatalf("got %+v", cands)
 	}
 }
@@ -466,5 +480,31 @@ func TestCandidateFromSynopsisPoster(t *testing.T) {
 	}
 	if c.Year != "2012" {
 		t.Fatalf("year=%q", c.Year)
+	}
+}
+
+func TestCandidateFromExtraAttrs(t *testing.T) {
+	item := map[string]any{
+		"show": map[string]any{
+			"id":       10773,
+			"name":     "Boku Dake ga Inai Machi",
+			"type":     "Animation",
+			"language": "Japanese",
+		},
+	}
+	spec := config.Provider{
+		Fields: map[string]string{
+			"id":       "show.id",
+			"title":    "show.name",
+			"kind":     "show.type",
+			"language": "show.language",
+		},
+	}
+	c, ok := candidateFrom("tvmaze", spec, item)
+	if !ok {
+		t.Fatal("expected candidate")
+	}
+	if c.Attrs["kind"] != "Animation" || c.Attrs["language"] != "Japanese" {
+		t.Fatalf("attrs=%v", c.Attrs)
 	}
 }

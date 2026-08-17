@@ -13,6 +13,8 @@ Rules:
 - year is empty unless a 4-digit year is in the listing, like (2016) or .1998. Never guess.
 - Folder separators ` - `, `_`, `|` are not title punctuation. If the folder uses ` - ` between a name and a subtitle, emit a colon. Keep apostrophes. Keep hyphens inside words.
 - Do not emit type, season, episode, filenames, or SxxExx.
+- Never use Season N/, Sxx/, or SxxExx as a title. Prefer the Folder: line.
+- Never use the words after SxxExx- in a sample filename as the show title.
 - Extras (Openings & Endings, NCOP, NCED, trailers) are not shows.
 
 Return JSON {"shows":[{"title":"","year":""}]} only.

@@ -62,7 +62,18 @@ func main() {
 			blob += strings.ToLower(m.Content)
 		}
 		var content []byte
-		if strings.Contains(blob, `"shows"`) || strings.Contains(blob, "unique titles") {
+		if strings.Contains(blob, `"columns"`) || strings.Contains(blob, "column headers") || strings.Contains(blob, "map csv") {
+			content, _ = json.Marshal(map[string]any{
+				"columns": map[string]string{
+					"title":   "title",
+					"year":    "year",
+					"type":    "type",
+					"season":  "season",
+					"episode": "episode",
+					"imdb":    "imdb",
+				},
+			})
+		} else if strings.Contains(blob, `"shows"`) || strings.Contains(blob, "unique titles") {
 			shows := []map[string]string{}
 			if strings.Contains(blob, "girls") {
 				shows = append(shows, map[string]string{"title": "Girls", "year": "2012", "type": "tv"})

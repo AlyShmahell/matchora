@@ -7,7 +7,7 @@ if [ -d "$SEED" ]; then
   for f in "$SEED"/*; do
     [ -f "$f" ] || continue
     dest="$DATA/config/$(basename "$f")"
-    [ -f "$dest" ] || cp "$f" "$dest"
+    cp "$f" "$dest"
   done
 fi
 chown matchora:matchora "$DATA"

@@ -165,3 +165,74 @@ func TestWorkerWritesJobBeforeBatchFinishes(t *testing.T) {
 	list, _ := store.List()
 	t.Fatalf("expected fast matched while slow pending, jobs=%+v", list)
 }
+
+func TestWorkerSiblingTimeoutDoesNotStarveFast(t *testing.T) {
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Search": []any{map[string]any{"imdbID": "tt1", "Title": "Dune", "Year": "2021"}},
+		})
+	}))
+	t.Cleanup(fast.Close)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(slow.Close)
+
+	cfg := config.Config{
+		HTTP:  config.HTTP{TimeoutMS: 200, Retries: 1, ProviderTimeoutMS: 400},
+		Match: config.Match{MinScore: 0.72, MinMargin: 0.04, Workers: 2},
+		Providers: map[string]config.Provider{
+			"omdb": {
+				Types:  []string{"movie"},
+				Base:   fast.URL,
+				URL:    "{base}",
+				Query:  map[string]string{"s": "{title}"},
+				Items:  "Search",
+				Fields: map[string]string{"id": "imdbID", "title": "Title", "year": "Year", "url": "imdbID"},
+			},
+			"jikan": {
+				Types:  []string{"anime"},
+				Base:   slow.URL,
+				URL:    "{base}/anime",
+				Query:  map[string]string{"q": "{title}"},
+				Items:  "data",
+				Fields: map[string]string{"id": "mal_id", "title": "title", "year": "year", "url": "url"},
+			},
+		},
+	}
+	store := New(t.TempDir())
+	if err := store.ReplaceAll([]match.Job{
+		{ID: "movie", Title: "Dune", Type: "movie", Status: "pending"},
+		{ID: "anime", Title: "Slow", Type: "anime", Status: "pending"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewWorker(cfg, store).Kick()
+
+	deadline := time.Now().Add(3 * time.Second)
+	var movie, anime match.Job
+	for time.Now().Before(deadline) {
+		list, err := store.List()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, j := range list {
+			if j.ID == "movie" {
+				movie = j
+			}
+			if j.ID == "anime" {
+				anime = j
+			}
+		}
+		if movie.Status == "matched" && anime.Status != "pending" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if movie.Status != "matched" || movie.Match == nil || movie.Match.Provider != "omdb" {
+		t.Fatalf("movie=%+v", movie)
+	}
+	if anime.Status == "pending" {
+		t.Fatalf("anime still pending: %+v", anime)
+	}
+}

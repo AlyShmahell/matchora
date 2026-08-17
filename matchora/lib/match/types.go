@@ -1,14 +1,15 @@
 package match
 
 type Candidate struct {
-	Provider  string  `json:"provider"`
-	ID        string  `json:"id"`
-	Title     string  `json:"title"`
-	Year      string  `json:"year,omitempty"`
-	Score     float64 `json:"score,omitempty"`
-	URL       string  `json:"url,omitempty"`
-	Synopsis  string  `json:"synopsis,omitempty"`
-	Poster    string  `json:"poster,omitempty"`
+	Provider  string            `json:"provider"`
+	ID        string            `json:"id"`
+	Title     string            `json:"title"`
+	Year      string            `json:"year,omitempty"`
+	Score     float64           `json:"score,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Synopsis  string            `json:"synopsis,omitempty"`
+	Poster    string            `json:"poster,omitempty"`
+	Attrs     map[string]string `json:"attrs,omitempty"`
 }
 
 func (c Candidate) Key() string {

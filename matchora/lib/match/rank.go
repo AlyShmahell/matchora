@@ -45,11 +45,21 @@ func rankEmbed(ctx context.Context, cfg config.Config, httpc *httpClient, query 
 	}
 	out := append([]Candidate(nil), cands...)
 	for i, c := range out {
-		vec, err := embed(ctx, httpc, cfg, c.Title+" "+c.Year)
+		vec, err := embed(ctx, httpc, cfg, strings.TrimSpace(c.Title+" "+c.Year))
 		if err != nil {
 			return nil, err
 		}
-		out[i].Score = cosine(qvec, vec)
+		score := cosine(qvec, vec)
+		if syn := strings.TrimSpace(c.Synopsis); syn != "" {
+			svec, err := embed(ctx, httpc, cfg, syn)
+			if err != nil {
+				return nil, err
+			}
+			if s := cosine(qvec, svec); s > score {
+				score = s
+			}
+		}
+		out[i].Score = score
 	}
 	sortByScore(out)
 	return out, nil

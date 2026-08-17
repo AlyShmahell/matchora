@@ -23,6 +23,7 @@ var (
 	folderLine     = regexp.MustCompile(`(?m)^Folder:\s*(.+)$`)
 	fileLine       = regexp.MustCompile(`(?m)^File:\s*(.+)$`)
 	parentLine     = regexp.MustCompile(`(?m)^Parent:\s*(.+)$`)
+	childDirLine   = regexp.MustCompile(`(?m)^  - (.+?)/\s*(?:\(|$)`)
 	spacedDash     = regexp.MustCompile(`\s+[-–—]\s+`)
 )
 
@@ -280,6 +281,9 @@ func sanitizeGrouped(c Cleaned, listing string) Cleaned {
 	if c.Year != "" && !yearInListing(listing, c.Year) {
 		c.Year = ""
 	}
+	if hint != "" && (isSeasonName(c.Title) || seasonOnlyTree(listing) && !sameTitle(c.Title, hint)) {
+		c.Title = strings.TrimSpace(spacedDash.ReplaceAllString(hint, ": "))
+	}
 	return c
 }
 
@@ -307,6 +311,74 @@ func listingTags(listing string) []string {
 		tags = append(tags, t)
 	}
 	return tags
+}
+
+func listingChildDirs(listing string) []string {
+	matches := childDirLine.FindAllStringSubmatch(listing, -1)
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		name := strings.TrimSpace(m[1])
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func seasonOnlyTree(listing string) bool {
+	dirs := listingChildDirs(listing)
+	if len(dirs) == 0 {
+		return false
+	}
+	for _, d := range dirs {
+		if !isSeasonName(d) && !isExtrasName(d) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSeasonName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(strings.TrimRight(strings.TrimSpace(name), "/")))
+	if strings.HasPrefix(n, "season") {
+		rest := strings.TrimLeft(n[len("season"):], " ._-")
+		return rest != "" && isDigits(rest)
+	}
+	if len(n) >= 2 && n[0] == 's' && isDigits(n[1:]) {
+		return true
+	}
+	return false
+}
+
+func isExtrasName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(strings.TrimRight(strings.TrimSpace(name), "/")))
+	switch n {
+	case "behind the scenes", "deleted scenes", "trailers", "interviews",
+		"scenes", "featurettes", "shorts", "other", "extras":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func sameTitle(a, b string) bool {
+	return foldTitle(a) == foldTitle(b)
+}
+
+func foldTitle(s string) string {
+	return strings.ToLower(strings.TrimSpace(spacedDash.ReplaceAllString(s, ": ")))
 }
 
 func listingHint(listing string) string {

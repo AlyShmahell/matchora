@@ -31,7 +31,7 @@ func searchProviders(ctx context.Context, cfg config.Config, httpc *httpClient, 
 
 func searchProvidersDefer(ctx context.Context, cfg config.Config, httpc *httpClient, job Job, deferred bool) ([]Candidate, error) {
 	out, errs, ok := collectProviders(ctx, cfg, httpc, job, true, deferred)
-	if len(out) == 0 {
+	if len(out) == 0 && job.Type == "" {
 		more, moreErrs, moreOK := collectProviders(ctx, cfg, httpc, job, false, deferred)
 		out = append(out, more...)
 		errs = append(errs, moreErrs...)
@@ -272,7 +272,30 @@ func candidateFrom(name string, spec config.Provider, item any) (Candidate, bool
 		URL:      href,
 		Synopsis: synopsis,
 		Poster:   poster,
+		Attrs:    extraAttrs(spec.Fields, item),
 	}, true
+}
+
+var coreFields = map[string]bool{
+	"id": true, "title": true, "year": true, "url": true, "synopsis": true, "poster": true,
+}
+
+func extraAttrs(fields map[string]string, item any) map[string]string {
+	var attrs map[string]string
+	for key, path := range fields {
+		if coreFields[key] || path == "" {
+			continue
+		}
+		s := strings.TrimSpace(asString(dig(item, path)))
+		if s == "" {
+			continue
+		}
+		if attrs == nil {
+			attrs = map[string]string{}
+		}
+		attrs[key] = s
+	}
+	return attrs
 }
 
 func dig(v any, path string) any {

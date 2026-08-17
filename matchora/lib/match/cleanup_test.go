@@ -200,6 +200,34 @@ func TestParseShowsNumericYear(t *testing.T) {
 	}
 }
 
+func TestParseShowsReplacesSeasonTitleWithFolder(t *testing.T) {
+	listing := "Folder: Japan Sinks\n  - Season 1/ (10 videos: [Tag] Nihon Chinbotsu - S01E01.mkv, ...)\n"
+	got := parseShows([]byte(`{"shows":[{"title":"S1/","year":""}]}`), listing)
+	if len(got) != 1 || got[0].Title != "Japan Sinks" {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestParseShowsSeasonOnlyTreePrefersFolder(t *testing.T) {
+	listing := "Folder: Solo Leveling\n  - Season 1/ (12 videos: S01E01.mkv)\n  - Season 2/ (5 videos: S02E01-You Aren't E-Rank, Are You.mkv, S02E03-Still a Long Way to Go.mkv)\n"
+	got := parseShows([]byte(`{"shows":[{"title":"You Are A Long Way To Go","year":""}]}`), listing)
+	if len(got) != 1 || got[0].Title != "Solo Leveling" {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestParseShowsKeepsMixedSeasonAndMovie(t *testing.T) {
+	listing := "Folder: KonoSuba\n  - Season 1/ (1 videos: S01E01.mkv)\n  - Legend of Crimson/ (1 videos: Legend of Crimson.mkv)\n"
+	raw := []byte(`{"shows":[{"title":"KonoSuba","year":""},{"title":"Legend of Crimson","year":""}]}`)
+	got := parseShows(raw, listing)
+	if len(got) != 2 {
+		t.Fatalf("len=%d got=%+v", len(got), got)
+	}
+	if got[0].Title != "KonoSuba" || got[1].Title != "Legend of Crimson" {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
 func TestGroupFallsBackWhenChatFails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)

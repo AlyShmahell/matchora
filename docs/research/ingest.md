@@ -1,11 +1,13 @@
 # Research: ingest
 
-Admin upload of title rows. Parsed rows become jobs and are auto-matched.
+Admin upload of title rows. Parsed rows become jobs and are auto-matched. Matching is the same `runOne` path as scan.
 
 ## Formats
 
-- **CSV** with a header. Columns (case-insensitive): `title` (required), `year`, `type` (`movie`|`tv`|`anime`), `season`, `episode`, `imdb`.
+- **CSV** with a header. Canonical fields: `title` (required), `year`, `type`, `season`, `episode`, `imdb`.
 - **JSON** array of the same fields.
+
+Unknown CSV headers are mapped in Go from `{data_dir}/config/default.yaml` `ingest.aliases` (normalized names, e.g. `media_type` → `type`). If `title` is still missing, one instruct call uses `{data_dir}/config/ingest.md` plus a few sample rows and returns `{"columns":{"title":"…"}}` (source header names). Type cells are then rewritten from `ingest.types` (`episode` / `season` → `tv`). Chat failure keeps the alias map; missing `title` is still `400`.
 
 Detect format from `Content-Type`, filename (`.csv` / `.json`), or the first non-space byte (`[` vs a header).
 

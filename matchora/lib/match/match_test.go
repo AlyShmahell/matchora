@@ -164,3 +164,89 @@ func deferPairConfig(tvURL, jkURL string) config.Config {
 		},
 	}
 }
+
+func TestRunOneTypedMovieSkipsJikanFallback(t *testing.T) {
+	var jk atomic.Int32
+	omdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"Search": []any{}})
+	}))
+	t.Cleanup(omdb.Close)
+	jikan := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jk.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []any{map[string]any{"mal_id": 1, "title": "Dune", "year": 2021, "url": "http://j"}},
+		})
+	}))
+	t.Cleanup(jikan.Close)
+	cfg := config.Config{
+		HTTP:  config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 1000},
+		Match: config.Match{MinScore: 0.72, MinMargin: 0.04},
+		Providers: map[string]config.Provider{
+			"omdb": {
+				Types:  []string{"movie", "tv", ""},
+				Base:   omdb.URL,
+				URL:    "{base}",
+				Query:  map[string]string{"s": "{title}"},
+				Items:  "Search",
+				Fields: map[string]string{"id": "imdbID", "title": "Title", "year": "Year", "url": "imdbID"},
+			},
+			"jikan": {
+				Types:  []string{"anime"},
+				Base:   jikan.URL,
+				URL:    "{base}/anime",
+				Query:  map[string]string{"q": "{title}"},
+				Items:  "data",
+				Fields: map[string]string{"id": "mal_id", "title": "title", "year": "year", "url": "url"},
+				Defer:  true,
+			},
+		},
+	}
+	job := runOne(context.Background(), cfg, newHTTP(cfg), Job{Title: "Dune", Type: "movie"})
+	if jk.Load() != 0 {
+		t.Fatalf("jikan hits=%d", jk.Load())
+	}
+	if job.Status != "unmatched" {
+		t.Fatalf("status=%s err=%s match=%+v", job.Status, job.Error, job.Match)
+	}
+}
+
+func TestPreferCandidatesKeepsAnimeShaped(t *testing.T) {
+	cfg := config.Config{Match: config.Match{Prefer: map[string]map[string]string{
+		"anime": {"language": "Japanese", "kind": "Animation"},
+	}}}
+	cands := []Candidate{
+		{Title: "History Erased", Attrs: map[string]string{"language": "English", "kind": "Documentary"}},
+		{Title: "Epithet Erased", Attrs: map[string]string{"language": "English", "kind": "Animation"}},
+		{Title: "Boku Dake ga Inai Machi", Attrs: map[string]string{"language": "Japanese", "kind": "Animation"}},
+	}
+	got := preferCandidates(cfg, "anime", cands)
+	if len(got) != 1 || got[0].Title != "Boku Dake ga Inai Machi" {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestPreferCandidatesKeepsAllWhenNoneMatch(t *testing.T) {
+	cfg := config.Config{Match: config.Match{Prefer: map[string]map[string]string{
+		"anime": {"language": "Japanese", "kind": "Animation"},
+	}}}
+	cands := []Candidate{
+		{Title: "History Erased", Attrs: map[string]string{"language": "English", "kind": "Documentary"}},
+	}
+	got := preferCandidates(cfg, "anime", cands)
+	if len(got) != 1 || got[0].Title != "History Erased" {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestAutoMatchSoloMinScore(t *testing.T) {
+	cfg := config.Config{Match: config.Match{MinScore: 0.72, SoloMinScore: 0.01, MinMargin: 0.04}}
+	if !autoMatch(cfg, []Candidate{{Score: 0.05}}) {
+		t.Fatal("solo 0.05 should match")
+	}
+	if autoMatch(cfg, []Candidate{{Score: 0.80}, {Score: 0.79}}) {
+		t.Fatal("two close high scores should stay manual")
+	}
+	if autoMatch(cfg, []Candidate{{Score: 0.50}, {Score: 0.10}}) {
+		t.Fatal("two candidates still need min_score")
+	}
+}

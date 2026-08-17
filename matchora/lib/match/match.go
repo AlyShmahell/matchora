@@ -39,7 +39,7 @@ func runOne(ctx context.Context, cfg config.Config, httpc *httpClient, job Job) 
 	cands := append(append([]Candidate(nil), fast...), slow...)
 	errs := append(append([]string(nil), ferrs...), serrs...)
 	ok := fok + sok
-	if len(cands) == 0 {
+	if len(cands) == 0 && job.Type == "" {
 		restFast, rferrs, rfok := collectProviders(ctx, cfg, httpc, job, false, false)
 		if job, done := rankPass(ctx, cfg, httpc, job, restFast); done {
 			return job
@@ -68,7 +68,7 @@ func rankPass(ctx context.Context, cfg config.Config, httpc *httpClient, job Job
 		return job, false
 	}
 	job = finishRank(ctx, cfg, httpc, job, cands)
-	if job.Status == "error" {
+	if job.Status == "error" || job.Status == "matched" {
 		return job, true
 	}
 	if skipDefer(cfg, job.Candidates) {
@@ -90,6 +90,7 @@ func finishRank(ctx context.Context, cfg config.Config, httpc *httpClient, job J
 		name = "embed"
 	}
 	done := waitStart(ctx, job, name)
+	cands = preferCandidates(cfg, job.Type, cands)
 	ranker, ranked, err := rank(ctx, cfg, httpc, job.QueryText(), cands)
 	done(err)
 	if err != nil {
@@ -119,11 +120,45 @@ func autoMatch(cfg config.Config, ranked []Candidate) bool {
 		return false
 	}
 	best := ranked[0]
-	if best.Score < cfg.Match.MinScore {
+	need := cfg.Match.MinScore
+	if len(ranked) == 1 {
+		need = cfg.MatchSoloScore()
+	}
+	if best.Score < need {
 		return false
 	}
 	if len(ranked) > 1 && best.Score-ranked[1].Score < cfg.Match.MinMargin {
 		return false
+	}
+	return true
+}
+
+func preferCandidates(cfg config.Config, jobType string, cands []Candidate) []Candidate {
+	want := cfg.Match.Prefer[jobType]
+	if len(want) == 0 || len(cands) == 0 {
+		return cands
+	}
+	var keep []Candidate
+	for _, c := range cands {
+		if preferMatch(c, want) {
+			keep = append(keep, c)
+		}
+	}
+	if len(keep) == 0 {
+		return cands
+	}
+	return keep
+}
+
+func preferMatch(c Candidate, want map[string]string) bool {
+	for k, v := range want {
+		got := ""
+		if c.Attrs != nil {
+			got = c.Attrs[k]
+		}
+		if !strings.EqualFold(strings.TrimSpace(got), strings.TrimSpace(v)) {
+			return false
+		}
 	}
 	return true
 }

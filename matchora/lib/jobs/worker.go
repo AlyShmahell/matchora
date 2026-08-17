@@ -73,12 +73,13 @@ func (w *Worker) loop() {
 		if len(batch) == 0 {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), w.cfg.HTTPTimeout())
 		var wg sync.WaitGroup
 		wg.Add(len(batch))
 		for _, job := range batch {
 			go func(job match.Job) {
 				defer wg.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), w.cfg.HTTPTimeout())
+				defer cancel()
 				out := match.RunWith(match.WithCircuit(ctx, w.cool), w.cfg, []match.Job{job}, w.waits)[0]
 				if err := w.store.Update(map[string]match.Job{out.ID: out}); err != nil {
 					log.Printf("match worker: update: %v", err)
@@ -86,6 +87,5 @@ func (w *Worker) loop() {
 			}(job)
 		}
 		wg.Wait()
-		cancel()
 	}
 }

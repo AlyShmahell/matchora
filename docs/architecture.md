@@ -7,11 +7,11 @@ Matchora ingests title rows or scans a library path, searches metadata APIs defi
 | Path | Role |
 |------|------|
 | `matchora/app` | HTTP server |
-| `matchora/lib/config` | YAML loader (`-config` path); `prompt.md` is a sibling of that file |
-| `matchora/share/config` | Seed `default.yaml` + `prompt.md` copied into the image |
+| `matchora/lib/config` | YAML loader (`-config` path); `prompt.md` and `ingest.md` are siblings of that file |
+| `matchora/share/config` | Seed `default.yaml` + `prompt.md` + `ingest.md` copied into the image |
 | `matchora/lib` | fs, ingest, jobs, llama runtime, match, scan |
 | `matchora/gui` | admin console |
-| `data/` | jobs.json, `config/default.yaml`, `config/prompt.md`, `llamacpp/`, optional `secrets` and `config.yaml` |
+| `data/` | jobs.json, `config/default.yaml`, `config/prompt.md`, `config/ingest.md`, `llamacpp/`, optional `secrets` and `config.yaml` |
 | `tests/` | smoke (stub metadata + stub chat cleanup) + live profile |
 
 ## HTTP

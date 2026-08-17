@@ -10,15 +10,15 @@ Shipped defaults:
 | [Jikan v4](https://docs.api.jikan.moe/) | none | `GET /anime?q=` — `min_interval_ms: 4000`, `defer: true` |
 | OMDb | `{data_dir}/secrets` key `omdb` | `?s=` + `type` — skipped when `api_key` is empty (`require: api_key`) |
 
-Type lists on each provider: `tv` / `""` → TVMaze (+ OMDb if keyed); `anime` → Jikan; `movie` → OMDb if keyed else Jikan.
+Type lists are an allowlist. A typed job only calls providers that list that type. Empty job type still means every provider (scan rows with no type). Defaults: `tv` / `""` → TVMaze (+ OMDb if keyed); `anime` → TVMaze then deferred Jikan; `movie` → OMDb if keyed.
 
-`defer: true` providers run only if the fast pass is terrible: fewer than `match.min_hits` candidates (quantity) or best score below `match.min_score` (quality). `match.min_margin` is only for auto-`matched` vs `manual`. Within a pass, provider GETs for that title run in parallel. Wanted-then-fallback stays sequential across passes. The engine never switches on provider names.
+`defer: true` providers run only if the fast pass is terrible: fewer than `match.min_hits` candidates (quantity) or best score below `match.min_score` (quality). `match.min_margin` is only for auto-`matched` vs `manual`. Within a pass, provider GETs for that title run in parallel. Untyped jobs may still fall back to providers that did not list `""`. The engine never switches on provider names.
 
-Pending jobs run up to `match.workers` at a time (default `8`; values below 1 become 1). Each job is written when it finishes; a slow deferred call does not hold the rest of the batch. Provider `min_interval_ms` still paces that provider across those goroutines.
+Pending jobs run up to `match.workers` at a time (default `8`; values below 1 become 1). Each job gets its own `http.timeout_ms` clock; a slow deferred call does not hold or cancel the rest of the batch. Provider `min_interval_ms` still paces that provider across those goroutines.
 
 GET retries, backoff, and **per-attempt** timeout (`provider_timeout_ms`) come from the `http` section. Provider search does not wrap all retries in that timeout. POST (embeddings / chat) is not retried. `POST /v1/retry` rematches `status: error` and `status: unmatched` rows.
 
-A provider that **errors after retries** on 2 jobs in a row (`match.cooldown_fails`, default 2) is skipped for `match.cooldown_ms` (default 1 hour). A later success resets the streak. Empty 200s do not count. The cooldown list lives on the worker for the process lifetime.
+A provider that **errors after retries** on 2 jobs in a row (`match.cooldown_fails`, default 2) is skipped for `match.cooldown_ms` (default 1 hour). A later success resets the streak. Empty 200s do not count. A dead parent context (batch leftover or cancel) is not a failure; a per-attempt timeout while the job context is still alive is. The cooldown list lives on the worker for the process lifetime.
 
 After rank, auto-`matched` only if `score >= match.min_score` and the gap to second is `>= match.min_margin` (or a single candidate). Otherwise `status: manual`; the user picks via `POST /v1/jobs/{id}/select`. Zero hits stay `unmatched`.
 
@@ -33,6 +33,6 @@ The app downloads llama.cpp and GGUFs from [default.yaml](../../matchora/share/c
 
 `ranker: embed|llm` in YAML (default embed). If the embed server is down, lexical token overlap + year bonus; record `ranker: lexical`.
 
-Scan grouping runs instruct chat on each immediate child (folder subcontent or a top-level file) **before** provider search. CSV ingest does not. Grouped jobs already have `title` / `type`. If grouping returns nothing or invalid JSON, use the Folder/File name; skip only when that hint is missing or looks like a filename / SxxExx.
+Scan grouping runs instruct chat on each immediate child (folder subcontent or a top-level file) **before** provider search. CSV ingest maps unknown headers with YAML aliases, then one instruct call if `title` is still missing (`ingest.md`). Type cells are rewritten from `ingest.types`. Grouped and ingested jobs then share `runOne`. If grouping returns nothing or invalid JSON, use the Folder/File name; skip only when that hint is missing or looks like a filename / SxxExx.
 
 Binaries and models land in `{data_dir}/llamacpp/` (app) or the `llama-cpp` volume (tests). Not committed.
