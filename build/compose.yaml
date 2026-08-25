@@ -1,0 +1,7 @@
+services:
+  dist:
+    build:
+      context: ../matchora
+      dockerfile: ../build/Containerfile
+    volumes:
+      - ./dist:/out:z

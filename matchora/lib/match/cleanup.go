@@ -40,7 +40,7 @@ func Cleanup(ctx context.Context, cfg config.Config, raw, parent string) Cleaned
 	if fallback.Title == "" {
 		fallback.Title = raw
 	}
-	base := cfg.Llama.LLMBaseURL
+	base := cfg.ChatBaseURL()
 	if base == "" {
 		return fallback
 	}
@@ -62,8 +62,8 @@ func Cleanup(ctx context.Context, cfg config.Config, raw, parent string) Cleaned
 		"temperature":     0,
 		"response_format": map[string]string{"type": "json_object"},
 	}
-	if cfg.Llama.Model != "" {
-		payload["model"] = cfg.Llama.Model
+	if id := cfg.InstructModel(); id != "" {
+		payload["model"] = id
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -107,7 +107,7 @@ func Group(ctx context.Context, cfg config.Config, listing string) []Cleaned {
 	if strings.TrimSpace(listing) == "" {
 		return nil
 	}
-	base := cfg.Llama.LLMBaseURL
+	base := cfg.ChatBaseURL()
 	if base == "" {
 		return nil
 	}
@@ -133,14 +133,14 @@ func chatJSON(ctx context.Context, cfg config.Config, system, user string) ([]by
 		"max_tokens":      256,
 		"response_format": map[string]string{"type": "json_object"},
 	}
-	if cfg.Llama.Model != "" {
-		payload["model"] = cfg.Llama.Model
+	if id := cfg.InstructModel(); id != "" {
+		payload["model"] = id
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err := url.JoinPath(strings.TrimRight(cfg.Llama.LLMBaseURL, "/"), "chat/completions")
+	endpoint, err := url.JoinPath(strings.TrimRight(cfg.ChatBaseURL(), "/"), "chat/completions")
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +291,7 @@ func yearInListing(listing, year string) bool {
 	if listing == "" || !yearOnly.MatchString(year) {
 		return false
 	}
-	return regexp.MustCompile(`\b`+regexp.QuoteMeta(year)+`\b`).MatchString(listing)
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(year) + `\b`).MatchString(listing)
 }
 
 func listingTags(listing string) []string {

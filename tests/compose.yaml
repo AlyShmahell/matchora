@@ -11,17 +11,15 @@ services:
 
   matchora:
     build:
-      context: ../matchora
+      context: ./runner
       dockerfile: Containerfile
-    command:
-      - -config
-      - /home/matchora/.oraora/matchora/config/default.yaml
     volumes:
-      - llama-cpp:/home/matchora/.oraora/matchora/llamacpp:z
-      - ./fixtures/library:/home/matchora/.oraora/matchora/library:z
+      - ../build/dist:/opt/matchora:z
+      - matchora-vendor:/opt/matchora/vendor:z
+      - ./fixtures/library:/opt/matchora/data/library:z
       - ./config.yaml:/run/matchora/config.yaml:z
     tmpfs:
-      - /home/matchora/.oraora/matchora
+      - /opt/matchora/data
     depends_on:
       stub:
         condition: service_healthy
@@ -34,12 +32,11 @@ services:
 
   check:
     build:
-      context: ../matchora
+      context: ./runner
       dockerfile: Containerfile
     volumes:
+      - ../build/dist:/opt/matchora:z
       - ./image/run:/check:z
-    tmpfs:
-      - /home/matchora/.oraora/matchora
     entrypoint: ["/bin/sh", "/check"]
 
   unit:
@@ -61,15 +58,13 @@ services:
   matchora-live:
     profiles: ["live"]
     build:
-      context: ../matchora
+      context: ./runner
       dockerfile: Containerfile
-    command:
-      - -config
-      - /home/matchora/.oraora/matchora/config/default.yaml
     volumes:
-      - llama-cpp:/home/matchora/.oraora/matchora/llamacpp:z
+      - ../build/dist:/opt/matchora:z
+      - matchora-vendor:/opt/matchora/vendor:z
     tmpfs:
-      - /home/matchora/.oraora/matchora
+      - /opt/matchora/data
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7680/health"]
       interval: 5s
@@ -88,4 +83,4 @@ services:
     command: ["/live/run"]
 
 volumes:
-  llama-cpp:
+  matchora-vendor:

@@ -133,3 +133,106 @@ func TestMatchCooldownDefaults(t *testing.T) {
 		t.Fatal("cooldown_ms=1500")
 	}
 }
+
+func TestLoadDefaultDataDirBesideBinary(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "default.yaml")
+	if err := os.WriteFile(yamlPath, []byte("version: \"1\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := ExeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "data")
+	if cfg.DataDir != want {
+		t.Fatalf("data_dir=%q want %q", cfg.DataDir, want)
+	}
+	if cfg.BrowseRoot != want {
+		t.Fatalf("browse_root=%q want %q", cfg.BrowseRoot, want)
+	}
+	if cfg.ExeDir != root {
+		t.Fatalf("exe_dir=%q want %q", cfg.ExeDir, root)
+	}
+}
+
+func TestLoadRelativeDataDir(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "default.yaml")
+	if err := os.WriteFile(yamlPath, []byte("data_dir: rel-data\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := ExeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "rel-data")
+	if cfg.DataDir != want {
+		t.Fatalf("data_dir=%q want %q", cfg.DataDir, want)
+	}
+}
+
+func TestLlamaPathsBesideBinary(t *testing.T) {
+	cfg := Config{ExeDir: "/opt/matchora"}
+	if got := cfg.LlamaBinDir(); got != "/opt/matchora/vendor/llama.cpp" {
+		t.Fatalf("bin=%q", got)
+	}
+	if got := cfg.LlamaModelsDir(); got != "/opt/matchora/vendor/llama.cpp/models" {
+		t.Fatalf("models=%q", got)
+	}
+	cfg.Llama.BinDir = "custom/bin"
+	cfg.Llama.ModelsDir = "/abs/models"
+	if got := cfg.LlamaBinDir(); got != "/opt/matchora/custom/bin" {
+		t.Fatalf("custom bin=%q", got)
+	}
+	if got := cfg.LlamaModelsDir(); got != "/abs/models" {
+		t.Fatalf("abs models=%q", got)
+	}
+}
+
+func TestLocalInstructSameOrigin(t *testing.T) {
+	cfg := Config{Llama: Llama{
+		BaseURL:    "http://127.0.0.1:8080/v1",
+		LLMBaseURL: "http://127.0.0.1:8080/v1",
+	}}
+	if !cfg.LocalInstruct() {
+		t.Fatal("same origin should be local")
+	}
+	cfg.Llama.LLMBaseURL = ""
+	if !cfg.LocalInstruct() {
+		t.Fatal("empty llm_base_url should be local")
+	}
+	cfg.Llama.LLMBaseURL = "http://stub:8080/v1"
+	if cfg.LocalInstruct() {
+		t.Fatal("stub should not be local")
+	}
+}
+
+func TestEmbedInstructModelIDs(t *testing.T) {
+	cfg := Config{Llama: Llama{
+		EmbedFile:    "all-MiniLM-L6-v2-Q4_K_M.gguf",
+		InstructFile: "SmolLM2-135M-Instruct-Q8_0.gguf",
+	}}
+	if got := cfg.EmbedModel(); got != "all-MiniLM-L6-v2-Q4_K_M" {
+		t.Fatalf("embed=%q", got)
+	}
+	if got := cfg.InstructModel(); got != "SmolLM2-135M-Instruct-Q8_0" {
+		t.Fatalf("instruct=%q", got)
+	}
+	cfg.Llama.Embed = "minilm"
+	cfg.Llama.Instruct = "smol"
+	if got := cfg.EmbedModel(); got != "minilm" {
+		t.Fatalf("embed override=%q", got)
+	}
+	if got := cfg.InstructModel(); got != "smol" {
+		t.Fatalf("instruct override=%q", got)
+	}
+}

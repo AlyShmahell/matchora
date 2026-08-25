@@ -16,7 +16,14 @@ compose() {
   fi
 }
 
-# Keep llamacpp volume so the runtime tarball and GGUFs are not re-downloaded every run.
+echo "==> dist"
+(
+  cd "$DIR/../build"
+  rm -rf dist
+  mkdir -p dist
+  compose up --build --force-recreate --abort-on-container-exit
+)
+
 compose down --remove-orphans >/dev/null 2>&1 || true
 compose build
 echo "==> check"

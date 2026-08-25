@@ -4,8 +4,6 @@ http:
   retries: 3
   backoff_ms: [1000, 2000, 4000]
   provider_timeout_ms: 10000
-data_dir: /home/matchora/.oraora/matchora
-browse_root: /home/matchora/.oraora/matchora
 version: "0.0.1"
 ranker: embed
 match:
@@ -22,14 +20,15 @@ match:
       kind: Animation
 llama:
   base_url: "http://127.0.0.1:8080/v1"
-  model: ""
-  llm_base_url: "http://127.0.0.1:8081/v1"
-  bin_dir: llamacpp/bin
-  models_dir: llamacpp/models
+  embed: ""
+  llm_base_url: "http://127.0.0.1:8080/v1"
+  instruct: ""
+  bin_dir: vendor/llama.cpp
+  models_dir: vendor/llama.cpp/models
   tarball_file: llama-b10453-bin-ubuntu-vulkan-x64.tar.gz
   tarball_url: "https://github.com/ggml-org/llama.cpp/releases/download/b10453/llama-b10453-bin-ubuntu-vulkan-x64.tar.gz"
-  model_file: all-MiniLM-L6-v2-Q4_K_M.gguf
-  model_url: "https://huggingface.co/second-state/All-MiniLM-L6-v2-Embedding-GGUF/resolve/main/all-MiniLM-L6-v2-Q4_K_M.gguf"
+  embed_file: all-MiniLM-L6-v2-Q4_K_M.gguf
+  embed_url: "https://huggingface.co/second-state/All-MiniLM-L6-v2-Embedding-GGUF/resolve/main/all-MiniLM-L6-v2-Q4_K_M.gguf"
   instruct_file: SmolLM2-135M-Instruct-Q8_0.gguf
   instruct_url: "https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf"
   gpu_layers: 999

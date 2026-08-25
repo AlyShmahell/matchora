@@ -56,7 +56,7 @@ echo "$jobs" | grep -q '"provider":"tvmaze"'
 echo "$jobs" | grep -q '"provider":"jikan"'
 
 scan="$(curl -sS -w '\n%{http_code}' -H 'Content-Type: application/json' \
-  -d '{"path":"/home/matchora/.oraora/matchora/library"}' "$URL/v1/scan")"
+  -d '{"path":"/opt/matchora/data/library"}' "$URL/v1/scan")"
 scode="$(printf '%s\n' "$scan" | tail -n 1)"
 sbody="$(printf '%s\n' "$scan" | sed '$d')"
 [ "$scode" = "202" ]

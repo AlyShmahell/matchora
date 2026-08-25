@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,7 @@ type Config struct {
 	Ingest     Ingest              `yaml:"ingest"`
 	Providers  map[string]Provider `yaml:"providers"`
 	ConfigPath string              `yaml:"-"`
+	ExeDir     string              `yaml:"-"`
 }
 
 type Ingest struct {
@@ -46,26 +48,27 @@ type HTTP struct {
 }
 
 type Match struct {
-	MinScore      float64                       `yaml:"min_score"`
-	SoloMinScore  float64                       `yaml:"solo_min_score"`
-	MinMargin     float64                       `yaml:"min_margin"`
-	MinHits       int                           `yaml:"min_hits"`
-	Workers       int                           `yaml:"workers"`
-	CooldownFails int                           `yaml:"cooldown_fails"`
-	CooldownMS    int                           `yaml:"cooldown_ms"`
-	Prefer        map[string]map[string]string  `yaml:"prefer"`
+	MinScore      float64                      `yaml:"min_score"`
+	SoloMinScore  float64                      `yaml:"solo_min_score"`
+	MinMargin     float64                      `yaml:"min_margin"`
+	MinHits       int                          `yaml:"min_hits"`
+	Workers       int                          `yaml:"workers"`
+	CooldownFails int                          `yaml:"cooldown_fails"`
+	CooldownMS    int                          `yaml:"cooldown_ms"`
+	Prefer        map[string]map[string]string `yaml:"prefer"`
 }
 
 type Llama struct {
 	BaseURL      string `yaml:"base_url"`
-	Model        string `yaml:"model"`
+	Embed        string `yaml:"embed"`
 	LLMBaseURL   string `yaml:"llm_base_url"`
+	Instruct     string `yaml:"instruct"`
 	BinDir       string `yaml:"bin_dir"`
 	ModelsDir    string `yaml:"models_dir"`
 	TarballFile  string `yaml:"tarball_file"`
 	TarballURL   string `yaml:"tarball_url"`
-	ModelFile    string `yaml:"model_file"`
-	ModelURL     string `yaml:"model_url"`
+	EmbedFile    string `yaml:"embed_file"`
+	EmbedURL     string `yaml:"embed_url"`
 	InstructFile string `yaml:"instruct_file"`
 	InstructURL  string `yaml:"instruct_url"`
 	GPULayers    int    `yaml:"gpu_layers"`
@@ -95,10 +98,36 @@ type Episode struct {
 	Year   string            `yaml:"year"`
 }
 
+func ExeDir() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return filepath.Dir(exe), nil
+}
+
+func resolvePath(base, p, fallback string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		p = fallback
+	}
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(base, p)
+}
+
 func Load(path string) (Config, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return Config{}, fmt.Errorf("-config is required")
+	}
+	root, err := ExeDir()
+	if err != nil {
+		return Config{}, err
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -114,20 +143,24 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if cfg.DataDir != "" {
-		if b, err := os.ReadFile(filepath.Join(cfg.DataDir, "config.yaml")); err == nil && len(b) > 0 {
-			raw, err = merge(raw, b)
-			if err != nil {
-				return Config{}, err
-			}
-			cfg, err = decode(raw)
-			if err != nil {
-				return Config{}, err
-			}
+	cfg.ExeDir = root
+	cfg.DataDir = resolvePath(root, cfg.DataDir, "data")
+	if b, err := os.ReadFile(filepath.Join(cfg.DataDir, "config.yaml")); err == nil && len(b) > 0 {
+		raw, err = merge(raw, b)
+		if err != nil {
+			return Config{}, err
 		}
+		cfg, err = decode(raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.ExeDir = root
+		cfg.DataDir = resolvePath(root, cfg.DataDir, "data")
 	}
-	if cfg.BrowseRoot == "" {
+	if strings.TrimSpace(cfg.BrowseRoot) == "" {
 		cfg.BrowseRoot = cfg.DataDir
+	} else {
+		cfg.BrowseRoot = resolvePath(root, cfg.BrowseRoot, cfg.DataDir)
 	}
 	if cfg.Ranker != "llm" {
 		cfg.Ranker = "embed"
@@ -168,26 +201,61 @@ func (c Config) IngestSampleRows() int {
 }
 
 func (c Config) LlamaBinDir() string {
-	return c.llamaPath(c.Llama.BinDir, "llamacpp/bin")
+	return c.llamaPath(c.Llama.BinDir, "vendor/llama.cpp")
 }
 
 func (c Config) LlamaModelsDir() string {
-	return c.llamaPath(c.Llama.ModelsDir, "llamacpp/models")
+	return c.llamaPath(c.Llama.ModelsDir, "vendor/llama.cpp/models")
 }
 
 func (c Config) llamaPath(rel, fallback string) string {
-	if rel == "" {
-		rel = fallback
+	base := c.ExeDir
+	if base == "" {
+		base, _ = ExeDir()
 	}
-	if filepath.IsAbs(rel) {
-		return rel
-	}
-	return filepath.Join(c.DataDir, rel)
+	return resolvePath(base, rel, fallback)
 }
 
 func (c Config) LocalInstruct() bool {
-	u := strings.ToLower(strings.TrimSpace(c.Llama.LLMBaseURL))
-	return strings.Contains(u, "127.0.0.1:8081") || strings.Contains(u, "localhost:8081")
+	llm := strings.TrimSpace(c.Llama.LLMBaseURL)
+	if llm == "" {
+		return strings.TrimSpace(c.Llama.BaseURL) != ""
+	}
+	return originHost(llm) != "" && originHost(llm) == originHost(c.Llama.BaseURL)
+}
+
+func (c Config) ChatBaseURL() string {
+	if strings.TrimSpace(c.Llama.LLMBaseURL) == "" {
+		return c.Llama.BaseURL
+	}
+	return c.Llama.LLMBaseURL
+}
+
+func (c Config) EmbedModel() string {
+	if s := strings.TrimSpace(c.Llama.Embed); s != "" {
+		return s
+	}
+	return modelStem(c.Llama.EmbedFile)
+}
+
+func (c Config) InstructModel() string {
+	if s := strings.TrimSpace(c.Llama.Instruct); s != "" {
+		return s
+	}
+	return modelStem(c.Llama.InstructFile)
+}
+
+func originHost(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Host)
+}
+
+func modelStem(file string) string {
+	b := filepath.Base(strings.TrimSpace(file))
+	return strings.TrimSuffix(b, ".gguf")
 }
 
 func (c Config) MatchWorkers() int {

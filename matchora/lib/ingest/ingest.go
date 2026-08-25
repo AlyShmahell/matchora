@@ -168,7 +168,7 @@ func mergeColumns(cmap map[string]int, headers []string, mapped map[string]strin
 }
 
 func askColumns(ctx context.Context, cfg config.Config, headers []string, rows [][]string) (map[string]string, error) {
-	base := strings.TrimSpace(cfg.Llama.LLMBaseURL)
+	base := strings.TrimSpace(cfg.ChatBaseURL())
 	if base == "" {
 		return nil, fmt.Errorf("no instruct")
 	}
@@ -251,14 +251,14 @@ func chatJSON(ctx context.Context, cfg config.Config, system, user string) ([]by
 		"max_tokens":      256,
 		"response_format": map[string]string{"type": "json_object"},
 	}
-	if cfg.Llama.Model != "" {
-		payload["model"] = cfg.Llama.Model
+	if id := cfg.InstructModel(); id != "" {
+		payload["model"] = id
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err := url.JoinPath(strings.TrimRight(cfg.Llama.LLMBaseURL, "/"), "chat/completions")
+	endpoint, err := url.JoinPath(strings.TrimRight(cfg.ChatBaseURL(), "/"), "chat/completions")
 	if err != nil {
 		return nil, err
 	}

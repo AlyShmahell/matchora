@@ -6,6 +6,10 @@ import (
 	"github.com/alyshmahell/matchora/lib/config"
 )
 
+func TestStopNoSpawn(t *testing.T) {
+	Stop()
+}
+
 func TestServerArgsOffload(t *testing.T) {
 	args := serverArgs(8080, nglOf(config.Config{}), "--model", "x.gguf")
 	ok := false
@@ -37,6 +41,20 @@ llamacpp:predicted_tokens_seconds{model="qwen"} 45.67
 	}
 }
 
+func TestModelListed(t *testing.T) {
+	ids := parseModelIDs([]byte(`{"data":[{"id":"all-MiniLM-L6-v2-Q4_K_M"}]}`))
+	if !modelListed(ids, "all-MiniLM-L6-v2-Q4_K_M.gguf") {
+		t.Fatalf("stem id not matched: %v", ids)
+	}
+	ids = parseModelIDs([]byte(`{"models":[{"name":"SmolLM2-135M-Instruct-Q8_0.gguf"}]}`))
+	if !modelListed(ids, "SmolLM2-135M-Instruct-Q8_0.gguf") {
+		t.Fatalf("filename id not matched: %v", ids)
+	}
+	if modelListed(ids, "all-MiniLM-L6-v2-Q4_K_M.gguf") {
+		t.Fatal("unrelated file listed")
+	}
+}
+
 func TestModelName(t *testing.T) {
 	if got := modelName("llamacpp/models/all-MiniLM-L6-v2-Q4_K_M.gguf"); got != "all-MiniLM-L6-v2-Q4_K_M" {
 		t.Fatalf("got %q", got)
@@ -60,4 +78,3 @@ func TestDeviceFromJSON(t *testing.T) {
 		t.Fatalf("fallback cpu got %q", d)
 	}
 }
-

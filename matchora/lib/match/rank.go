@@ -67,8 +67,8 @@ func rankEmbed(ctx context.Context, cfg config.Config, httpc *httpClient, query 
 
 func embed(ctx context.Context, httpc *httpClient, cfg config.Config, text string) ([]float64, error) {
 	payload := map[string]any{"input": text}
-	if cfg.Llama.Model != "" {
-		payload["model"] = cfg.Llama.Model
+	if id := cfg.EmbedModel(); id != "" {
+		payload["model"] = id
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -100,10 +100,7 @@ func embed(ctx context.Context, httpc *httpClient, cfg config.Config, text strin
 }
 
 func rankLLM(ctx context.Context, cfg config.Config, httpc *httpClient, query string, cands []Candidate) ([]Candidate, error) {
-	base := cfg.Llama.LLMBaseURL
-	if base == "" {
-		base = cfg.Llama.BaseURL
-	}
+	base := cfg.ChatBaseURL()
 	if base == "" {
 		return nil, fmt.Errorf("llama.llm_base_url is empty")
 	}
@@ -120,11 +117,11 @@ func rankLLM(ctx context.Context, cfg config.Config, httpc *httpClient, query st
 			{"role": "system", "content": "You rank media titles. Return JSON only."},
 			{"role": "user", "content": bld.String()},
 		},
-		"temperature": 0,
+		"temperature":     0,
 		"response_format": map[string]string{"type": "json_object"},
 	}
-	if cfg.Llama.Model != "" {
-		payload["model"] = cfg.Llama.Model
+	if id := cfg.InstructModel(); id != "" {
+		payload["model"] = id
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

@@ -2,7 +2,9 @@ package llama
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -13,58 +15,291 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/alyshmahell/matchora/lib/config"
 )
 
+var spawned *exec.Cmd
+
 func Start(cfg config.Config) error {
-	binDir := cfg.LlamaBinDir()
-	modelsDir := cfg.LlamaModelsDir()
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		return err
+	if !healthy(cfg.Llama.BaseURL) {
+		binDir := cfg.LlamaBinDir()
+		modelsDir := cfg.LlamaModelsDir()
+		if err := os.MkdirAll(modelsDir, 0o755); err != nil {
+			return err
+		}
+		if err := ensureBin(cfg, binDir); err != nil {
+			return err
+		}
+		if err := stageModel(cfg.Llama.EmbedFile, cfg.Llama.EmbedURL, modelsDir); err != nil {
+			return fmt.Errorf("embed model: %w", err)
+		}
+		if cfg.LocalInstruct() {
+			if err := stageModel(cfg.Llama.InstructFile, cfg.Llama.InstructURL, modelsDir); err != nil {
+				return fmt.Errorf("instruct model: %w", err)
+			}
+		}
+		ngl := nglOf(cfg)
+		if err := spawn(filepath.Join(binDir, "llama-server"), binDir, portOf(cfg.Llama.BaseURL, 8080), ngl,
+			"--metrics", "--embeddings", "--pooling", "mean", "--jinja",
+			"--ctx-size", "8192",
+			"--chat-template-kwargs", `{"enable_thinking": false}`,
+			"--models-dir", modelsDir,
+		); err != nil {
+			return err
+		}
+		if err := waitHealth(cfg.Llama.BaseURL, 120*time.Second); err != nil {
+			return fmt.Errorf("llama-server: %w", err)
+		}
 	}
-	if err := os.MkdirAll(modelsDir, 0o755); err != nil {
-		return err
+	if err := ensureListed(cfg, cfg.Llama.EmbedFile, cfg.Llama.EmbedURL); err != nil {
+		return fmt.Errorf("embed model: %w", err)
 	}
-	if err := ensureBin(cfg, binDir); err != nil {
-		return err
+	if cfg.LocalInstruct() {
+		if err := ensureListed(cfg, cfg.Llama.InstructFile, cfg.Llama.InstructURL); err != nil {
+			return fmt.Errorf("instruct model: %w", err)
+		}
 	}
-	embed := filepath.Join(modelsDir, cfg.Llama.ModelFile)
-	if err := ensureFile(cfg.Llama.ModelURL, embed); err != nil {
-		return err
-	}
-	server := filepath.Join(binDir, "llama-server")
-	ngl := nglOf(cfg)
-	if err := spawn(server, binDir, portOf(cfg.Llama.BaseURL, 8080), ngl,
-		"--metrics", "--ctx-size", "512", "--embeddings", "--pooling", "mean", "--model", embed); err != nil {
-		return err
-	}
-	if err := waitHealth(cfg.Llama.BaseURL, 120*time.Second); err != nil {
-		return fmt.Errorf("embed llama-server: %w", err)
-	}
-	if !cfg.LocalInstruct() {
+	return nil
+}
+
+func stageModel(file, rawURL, modelsDir string) error {
+	file = strings.TrimSpace(file)
+	if file == "" {
 		return nil
 	}
-	instruct := filepath.Join(modelsDir, cfg.Llama.InstructFile)
-	if err := ensureFile(cfg.Llama.InstructURL, instruct); err != nil {
+	return ensureFile(rawURL, filepath.Join(modelsDir, filepath.Base(file)))
+}
+
+func ensureListed(cfg config.Config, file, rawURL string) error {
+	file = strings.TrimSpace(file)
+	if file == "" {
+		return nil
+	}
+	ids, err := listModels(cfg.Llama.BaseURL, false)
+	if err != nil {
+		log.Printf("llama: list models: %v", err)
+		ids = nil
+	}
+	if modelListed(ids, file) {
+		return nil
+	}
+	dest := filepath.Join(cfg.LlamaModelsDir(), filepath.Base(file))
+	if err := ensureFile(rawURL, dest); err != nil {
 		return err
 	}
-	if err := spawn(server, binDir, portOf(cfg.Llama.LLMBaseURL, 8081), ngl,
-		"--metrics", "--ctx-size", "8192", "--jinja",
-		"--chat-template-kwargs", `{"enable_thinking": false}`,
-		"--model", instruct); err != nil {
+	ids, err = listModels(cfg.Llama.BaseURL, true)
+	if err == nil && modelListed(ids, file) {
+		return nil
+	}
+	var loadErr error
+	stem := strings.TrimSuffix(filepath.Base(file), ".gguf")
+	for _, name := range []string{filepath.Base(file), stem, dest} {
+		if name == "" {
+			continue
+		}
+		loadErr = loadModel(cfg.Llama.BaseURL, name)
+		if loadErr == nil {
+			break
+		}
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		ids, err := listModels(cfg.Llama.BaseURL, loadErr != nil)
+		if err == nil && modelListed(ids, file) {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	if loadErr != nil {
+		return loadErr
+	}
+	return fmt.Errorf("%s not in llama-server model list", file)
+}
+
+func healthy(base string) bool {
+	u := originOf(base)
+	if u == "" {
+		return false
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	for _, path := range []string{"/health", "/v1/models"} {
+		resp, err := client.Get(u + path)
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode < 500 {
+			return true
+		}
+	}
+	return false
+}
+
+func listModels(base string, reload bool) ([]string, error) {
+	u := originOf(base)
+	client := &http.Client{Timeout: 5 * time.Second}
+	var last error
+	paths := []string{"/v1/models", "/models"}
+	if reload {
+		paths = []string{"/models?reload=1", "/v1/models?reload=1", "/v1/models", "/models"}
+	}
+	var ids []string
+	seen := map[string]bool{}
+	ok := false
+	for _, path := range paths {
+		resp, err := client.Get(u + path)
+		if err != nil {
+			last = err
+			continue
+		}
+		b, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			last = readErr
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			last = fmt.Errorf("GET %s: status %d", path, resp.StatusCode)
+			continue
+		}
+		ok = true
+		for _, id := range parseModelIDs(b) {
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if ok {
+		return ids, nil
+	}
+	if last == nil {
+		last = fmt.Errorf("no models endpoint at %s", u)
+	}
+	return nil, last
+}
+
+func parseModelIDs(raw []byte) []string {
+	var ids []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			ids = append(ids, s)
+		}
+	}
+	var wrapped struct {
+		Data   []json.RawMessage `json:"data"`
+		Models []json.RawMessage `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil {
+		for _, m := range wrapped.Data {
+			for _, s := range modelFields(m) {
+				add(s)
+			}
+		}
+		for _, m := range wrapped.Models {
+			for _, s := range modelFields(m) {
+				add(s)
+			}
+		}
+		if len(ids) > 0 {
+			return ids
+		}
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		for _, m := range arr {
+			for _, s := range modelFields(m) {
+				add(s)
+			}
+		}
+	}
+	return ids
+}
+
+func modelFields(raw []byte) []string {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	if raw[0] == '"' {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			return []string{s}
+		}
+		return nil
+	}
+	var m struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Model string `json:"model"`
+		Path  string `json:"path"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	out := []string{m.ID, m.Name, m.Model}
+	if strings.TrimSpace(m.Path) != "" {
+		out = append(out, filepath.Base(m.Path))
+	}
+	return out
+}
+
+func modelListed(ids []string, file string) bool {
+	want := []string{
+		file,
+		filepath.Base(file),
+		strings.TrimSuffix(filepath.Base(file), ".gguf"),
+	}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		base := filepath.Base(id)
+		stem := strings.TrimSuffix(base, ".gguf")
+		for _, w := range want {
+			if strings.EqualFold(id, w) || strings.EqualFold(base, w) || strings.EqualFold(stem, w) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func loadModel(base, file string) error {
+	u := originOf(base) + "/models/load"
+	body, err := json.Marshal(map[string]string{"model": file})
+	if err != nil {
 		return err
 	}
-	if err := waitHealth(cfg.Llama.LLMBaseURL, 180*time.Second); err != nil {
-		return fmt.Errorf("instruct llama-server: %w", err)
+	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("POST /models/load: status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return nil
 }
 
 func ensureBin(cfg config.Config, binDir string) error {
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return err
+	}
 	server := filepath.Join(binDir, "llama-server")
-	if st, err := os.Stat(server); err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0 {
+	if requireExec(server) == nil {
 		return nil
 	}
 	if cfg.Llama.TarballURL == "" {
@@ -87,10 +322,10 @@ func ensureBin(cfg config.Config, binDir string) error {
 	if err := chmodRX(binDir); err != nil {
 		return err
 	}
-	if _, err := os.Stat(server); err != nil {
+	if err := os.Chmod(server, 0o755); err != nil {
 		return fmt.Errorf("llama-server missing after extract: %w", err)
 	}
-	return os.Chmod(server, 0o755)
+	return requireExec(server)
 }
 
 func extractBin(tarball, binDir string) error {
@@ -192,6 +427,17 @@ func download(rawURL, dest string) error {
 	return os.Rename(tmp, dest)
 }
 
+func requireExec(path string) error {
+	st, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !st.Mode().IsRegular() || st.Mode()&0o111 == 0 {
+		return fmt.Errorf("llama-server is not executable: %s", path)
+	}
+	return nil
+}
+
 func nglOf(cfg config.Config) int {
 	if cfg.Llama.GPULayers == 0 {
 		return 999
@@ -215,34 +461,27 @@ func spawn(bin, binDir string, port, ngl int, extra ...string) error {
 	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+binDir)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	log.Printf("llama: starting :%d", port)
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	spawned = cmd
+	return nil
 }
 
-func waitHealth(base string, d time.Duration) error {
-	u := strings.TrimRight(base, "/")
-	if strings.HasSuffix(u, "/v1") {
-		u = strings.TrimSuffix(u, "/v1")
+func Stop() {
+	cmd := spawned
+	spawned = nil
+	if cmd == nil || cmd.Process == nil {
+		return
 	}
-	deadline := time.Now().Add(d)
-	client := &http.Client{Timeout: 2 * time.Second}
-	for time.Now().Before(deadline) {
-		for _, path := range []string{"/health", "/v1/models"} {
-			resp, err := client.Get(u + path)
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode < 500 {
-					return nil
-				}
-			}
-		}
-		time.Sleep(time.Second)
-	}
-	return fmt.Errorf("not healthy at %s", base)
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	_ = cmd.Wait()
 }
 
-func portOf(raw string, fallback int) int {
-	u, err := url.Parse(raw)
+func portOf(base string, fallback int) int {
+	u, err := url.Parse(strings.TrimSpace(base))
 	if err != nil || u.Port() == "" {
 		return fallback
 	}
@@ -251,6 +490,17 @@ func portOf(raw string, fallback int) int {
 		return fallback
 	}
 	return p
+}
+
+func waitHealth(base string, d time.Duration) error {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if healthy(base) {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf("not healthy at %s", base)
 }
 
 func writeFile(dst string, r io.Reader, mode os.FileMode) error {

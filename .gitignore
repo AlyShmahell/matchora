@@ -28,9 +28,11 @@ go.work.sum
 .env
 matchora/.env
 
-# Runtime data
-/data/
-!data/.gitkeep
+# Dist builder output and packaged tarballs
+/build/dist/*
+!/build/dist/.gitkeep
+/build/package/*
+!/build/package/.gitkeep
 
 # Editor/IDE
 .idea/

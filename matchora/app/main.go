@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
-	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -14,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alyshmahell/matchora/gui"
 	"github.com/alyshmahell/matchora/lib/config"
 	matchfs "github.com/alyshmahell/matchora/lib/fs"
 	"github.com/alyshmahell/matchora/lib/ingest"
@@ -25,12 +23,18 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "", "path to default.yaml")
-	flag.Parse()
-	if strings.TrimSpace(*configPath) == "" {
-		log.Fatal("-config is required")
+	exeDir, err := config.ExeDir()
+	if err != nil {
+		log.Fatal(err)
 	}
-	cfg, err := config.Load(*configPath)
+	configPath := flag.String("config", "", "path to default.yaml")
+	prepare := flag.Bool("prepare", false, "install llama.cpp runtime and models, then exit")
+	flag.Parse()
+	path := strings.TrimSpace(*configPath)
+	if path == "" {
+		path = filepath.Join(exeDir, "config", "default.yaml")
+	}
+	cfg, err := config.Load(path)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -41,7 +45,12 @@ func main() {
 		log.Fatal(err)
 	}
 	if err := llama.Start(cfg); err != nil {
+		llama.Stop()
 		log.Fatal(err)
+	}
+	if *prepare {
+		llama.Stop()
+		return
 	}
 	store := jobs.New(cfg.DataDir)
 	worker := jobs.NewWorker(cfg, store)
@@ -186,11 +195,11 @@ func main() {
 		writeJSON(w, http.StatusOK, done)
 	})
 
-	static, err := fs.Sub(gui.FS, ".")
-	if err != nil {
-		log.Fatal(err)
+	public := filepath.Join(exeDir, "public")
+	if st, err := os.Stat(public); err != nil || !st.IsDir() {
+		log.Fatalf("public dir missing: %s", public)
 	}
-	mux.Handle("GET /", http.FileServer(http.FS(static)))
+	mux.Handle("GET /", http.FileServer(http.Dir(public)))
 
 	log.Printf("matchora %s listening on %s (data=%s ranker=%s)", cfg.Version, cfg.HTTP.Addr, cfg.DataDir, cfg.Ranker)
 	if err := http.ListenAndServe(cfg.HTTP.Addr, mux); err != nil {

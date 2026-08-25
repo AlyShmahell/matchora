@@ -25,10 +25,10 @@ func Stats(cfg config.Config) []ModelStat {
 	ngl := nglOf(cfg)
 	var out []ModelStat
 	if strings.TrimSpace(cfg.Llama.BaseURL) != "" {
-		out = append(out, probe("embed", cfg.Llama.ModelFile, cfg.Llama.BaseURL, ngl, true))
+		out = append(out, probe("embed", cfg.Llama.EmbedFile, cfg.Llama.BaseURL, ngl, true))
 	}
-	if cfg.LocalInstruct() && strings.TrimSpace(cfg.Llama.LLMBaseURL) != "" {
-		out = append(out, probe("instruct", cfg.Llama.InstructFile, cfg.Llama.LLMBaseURL, ngl, false))
+	if cfg.LocalInstruct() {
+		out = append(out, probe("instruct", cfg.Llama.InstructFile, cfg.ChatBaseURL(), ngl, false))
 	}
 	return out
 }

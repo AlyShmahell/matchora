@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1
+# Build context: matchora/
+
+FROM docker.io/library/golang:1.26-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY app ./app
+COPY lib ./lib
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=-buildvcs=false
+RUN go mod tidy \
+  && go build -ldflags="-s -w" -o /out/matchora ./app
+
+FROM docker.io/library/debian:trixie-slim
+WORKDIR /dist
+COPY --from=build /out/matchora /dist/matchora
+COPY share/config /dist/config
+COPY gui/index.html gui/style.css gui/app.js /dist/public/
+
+CMD ["sh", "-c", "cp -a /dist/. /out/ && chmod -R a+rX /out && chmod a+x /out/matchora"]

@@ -1,14 +1,14 @@
-# Research: admin GUI
+# Admin GUI
 
 The page under `matchora/gui/` is a verification console, not a product UI.
 
 ## Serving
 
-`go:embed` cannot leave its package directory, so the files live in `matchora/gui/` with a small `embed.go` that exports `FS`. The app serves that filesystem at `/`.
+The files live in `matchora/gui/` and the dist builder copies them to `{exeDir}/public`. The app serves that directory at `/`.
 
 ## Folder picker
 
-The browser cannot see the container filesystem. The File System Access API and `webkitdirectory` upload host files; they do not pick a server path. The admin picker therefore calls `GET /v1/fs?path=` and stays inside `browse_root` from YAML.
+The browser cannot see the host filesystem. The File System Access API and `webkitdirectory` upload host files; they do not pick a server path. The admin picker therefore calls `GET /v1/fs?path=` and stays inside `browse_root` from YAML.
 
 ## Upload
 
