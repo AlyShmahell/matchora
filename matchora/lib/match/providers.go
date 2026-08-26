@@ -77,7 +77,7 @@ func collectProviders(ctx context.Context, cfg config.Config, httpc *httpClient,
 	)
 	cool := circuitFrom(ctx)
 	fails := cfg.MatchCooldownFails()
-	ttl := cfg.MatchCooldown()
+	cr := cfg.MatchCooldown()
 	wg.Add(len(tasks))
 	for _, t := range tasks {
 		go func(name string, spec config.Provider) {
@@ -97,7 +97,7 @@ func collectProviders(ctx context.Context, cfg config.Config, httpc *httpClient,
 			defer mu.Unlock()
 			if err != nil {
 				if ctx.Err() == nil {
-					cool.Fail(name, fails, ttl)
+					cool.Fail(name, fails, cr.MinExp, cr.MaxExp)
 				}
 				errs = append(errs, name+": "+err.Error())
 				return
@@ -166,9 +166,10 @@ func fetchEpisode(ctx context.Context, cfg config.Config, httpc *httpClient, job
 		return nil
 	}
 	c, ok := candidateFrom(cand.Provider, config.Provider{
-		Fields:    spec.Episode.Fields,
-		Year:      spec.Episode.Year,
-		URLPrefix: spec.URLPrefix,
+		Fields:       spec.Episode.Fields,
+		Year:         spec.Episode.Year,
+		URLPrefix:    spec.URLPrefix,
+		PosterPrefix: spec.PosterPrefix,
 	}, obj)
 	if !ok {
 		done(nil)
@@ -263,6 +264,9 @@ func candidateFrom(name string, spec config.Provider, item any) (Candidate, bool
 	poster := ""
 	if p := spec.Fields["poster"]; p != "" {
 		poster = asString(dig(item, p))
+	}
+	if spec.PosterPrefix != "" && poster != "" {
+		poster = spec.PosterPrefix + poster
 	}
 	return Candidate{
 		Provider: name,

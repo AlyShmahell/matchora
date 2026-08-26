@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -126,11 +127,78 @@ func TestMatchCooldownDefaults(t *testing.T) {
 	if (Config{Match: Match{CooldownFails: 4}}).MatchCooldownFails() != 4 {
 		t.Fatal("cooldown_fails=4")
 	}
-	if (Config{}).MatchCooldown() != time.Hour {
-		t.Fatal("unset cooldown_ms should be 1h")
+	got := (Config{}).MatchCooldown()
+	if got.MinExp != 16 || got.MaxExp != 19 {
+		t.Fatalf("unset cooldown=%+v want 16/19", got)
 	}
-	if (Config{Match: Match{CooldownMS: 1500}}).MatchCooldown() != 1500*time.Millisecond {
-		t.Fatal("cooldown_ms=1500")
+	got = (Config{Match: Match{Cooldown: ExpRange{MinExp: 4, MaxExp: 7}}}).MatchCooldown()
+	if got.MinExp != 4 || got.MaxExp != 7 {
+		t.Fatalf("cooldown=%+v", got)
+	}
+}
+
+func TestClampExp(t *testing.T) {
+	got := ClampExp(ExpRange{}, 10, 13)
+	if got.MinExp != 10 || got.MaxExp != 13 {
+		t.Fatalf("defaults=%+v", got)
+	}
+	got = ClampExp(ExpRange{MinExp: 3, MaxExp: 4}, 10, 13)
+	if got.MinExp != 3 || got.MaxExp != 5 {
+		t.Fatalf("max < min+2: %+v", got)
+	}
+	got = ClampExp(ExpRange{MinExp: -2, MaxExp: 3}, 10, 13)
+	if got.MinExp != 0 || got.MaxExp != 3 {
+		t.Fatalf("neg min=%+v", got)
+	}
+	got = ClampExp(ExpRange{MinExp: 0, MaxExp: 2}, 10, 13)
+	if got.MinExp != 0 || got.MaxExp != 2 {
+		t.Fatalf("explicit zero min=%+v", got)
+	}
+}
+
+func TestJitterExpBounds(t *testing.T) {
+	for e := 1; e <= 12; e++ {
+		lo := time.Duration(1<<(e-1)) * time.Millisecond
+		hi := time.Duration(1<<e) * time.Millisecond
+		for i := 0; i < 40; i++ {
+			d := JitterExp(e)
+			if d < lo || d > hi {
+				t.Fatalf("exp=%d d=%s want [%s, %s]", e, d, lo, hi)
+			}
+		}
+	}
+}
+
+func TestLoadSecretAlias(t *testing.T) {
+	dir := t.TempDir()
+	data := filepath.Join(dir, "data")
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "secrets"), []byte("tmdb: abc123\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	yamlPath := filepath.Join(dir, "default.yaml")
+	raw := "data_dir: " + strconv.Quote(data) + "\nproviders:\n  tmdb: {}\n  tmdb_tv:\n    secret: tmdb\n"
+	if err := os.WriteFile(yamlPath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers["tmdb"].APIKey != "abc123" {
+		t.Fatalf("tmdb key=%q", cfg.Providers["tmdb"].APIKey)
+	}
+	if cfg.Providers["tmdb_tv"].APIKey != "abc123" {
+		t.Fatalf("tmdb_tv key=%q", cfg.Providers["tmdb_tv"].APIKey)
+	}
+}
+
+func TestHTTPBackoffDefaults(t *testing.T) {
+	got := (Config{}).HTTPBackoff()
+	if got.MinExp != 10 || got.MaxExp != 13 {
+		t.Fatalf("unset backoff=%+v want 10/13", got)
 	}
 }
 

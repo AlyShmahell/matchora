@@ -33,9 +33,9 @@ func TestSearchProviderRetries504(t *testing.T) {
 
 	cfg := config.Config{
 		HTTP: config.HTTP{
-			TimeoutMS:         30000,
+			TimeoutMS:         5000,
 			Retries:           3,
-			BackoffMS:         []int{10, 10, 10},
+			Backoff:           config.ExpRange{MinExp: 0, MaxExp: 2},
 			ProviderTimeoutMS: 200,
 		},
 		Providers: map[string]config.Provider{
@@ -305,6 +305,130 @@ func TestTypedMovieNeverHitsJikan(t *testing.T) {
 	}
 }
 
+func TestSearchProviderTMDB(t *testing.T) {
+	var gotPath, gotKey, gotQuery, gotAdult string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKey = r.URL.Query().Get("api_key")
+		gotQuery = r.URL.Query().Get("query")
+		gotAdult = r.URL.Query().Get("include_adult")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []any{
+				map[string]any{
+					"id":           550,
+					"title":        "Fight Club",
+					"release_date": "1999-10-15",
+					"overview":     "An insomniac office worker.",
+					"poster_path":  "/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
+				},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{
+		HTTP: config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 1000},
+		Providers: map[string]config.Provider{
+			"tmdb": {
+				Types:        []string{"movie"},
+				Require:      "api_key",
+				APIKey:       "test-key",
+				Base:         srv.URL,
+				URL:          "{base}/search/movie",
+				Query:        map[string]string{"api_key": "{api_key}", "query": "{title}", "include_adult": "false"},
+				Items:        "results",
+				Fields:       map[string]string{"id": "id", "title": "title", "year": "release_date", "url": "id", "synopsis": "overview", "poster": "poster_path"},
+				Year:         "prefix4",
+				URLPrefix:    "https://www.themoviedb.org/movie/",
+				PosterPrefix: "https://image.tmdb.org/t/p/w185",
+			},
+		},
+	}
+	cands, err := searchProviders(context.Background(), cfg, newHTTP(cfg), Job{Title: "Fight Club", Type: "movie"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/search/movie" || gotKey != "test-key" || gotQuery != "Fight Club" || gotAdult != "false" {
+		t.Fatalf("path=%q key=%q query=%q adult=%q", gotPath, gotKey, gotQuery, gotAdult)
+	}
+	if len(cands) != 1 {
+		t.Fatalf("got %+v", cands)
+	}
+	c := cands[0]
+	if c.Provider != "tmdb" || c.ID != "550" || c.Title != "Fight Club" || c.Year != "1999" {
+		t.Fatalf("got %+v", c)
+	}
+	if c.URL != "https://www.themoviedb.org/movie/550" {
+		t.Fatalf("url=%q", c.URL)
+	}
+	if c.Poster != "https://image.tmdb.org/t/p/w185/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg" {
+		t.Fatalf("poster=%q", c.Poster)
+	}
+	if c.Synopsis != "An insomniac office worker." {
+		t.Fatalf("synopsis=%q", c.Synopsis)
+	}
+}
+
+func TestSearchProviderTMDBTV(t *testing.T) {
+	var gotPath, gotKey, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKey = r.URL.Query().Get("api_key")
+		gotQuery = r.URL.Query().Get("query")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []any{
+				map[string]any{
+					"id":             1396,
+					"name":           "Breaking Bad",
+					"first_air_date": "2008-01-20",
+					"overview":       "A chemistry teacher.",
+					"poster_path":    "/ggFHVNu6YYI5L9pCfOacjizRGt.jpg",
+				},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{
+		HTTP: config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 1000},
+		Providers: map[string]config.Provider{
+			"tmdb_tv": {
+				Types:        []string{"tv", "anime"},
+				Require:      "api_key",
+				APIKey:       "test-key",
+				Secret:       "tmdb",
+				Base:         srv.URL,
+				URL:          "{base}/search/tv",
+				Query:        map[string]string{"api_key": "{api_key}", "query": "{title}", "include_adult": "false"},
+				Items:        "results",
+				Fields:       map[string]string{"id": "id", "title": "name", "year": "first_air_date", "url": "id", "synopsis": "overview", "poster": "poster_path"},
+				Year:         "prefix4",
+				URLPrefix:    "https://www.themoviedb.org/tv/",
+				PosterPrefix: "https://image.tmdb.org/t/p/w185",
+				Defer:        true,
+			},
+		},
+	}
+	cands, err := searchProvidersDefer(context.Background(), cfg, newHTTP(cfg), Job{Title: "Breaking Bad", Type: "tv"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/search/tv" || gotKey != "test-key" || gotQuery != "Breaking Bad" {
+		t.Fatalf("path=%q key=%q query=%q", gotPath, gotKey, gotQuery)
+	}
+	if len(cands) != 1 {
+		t.Fatalf("got %+v", cands)
+	}
+	c := cands[0]
+	if c.Provider != "tmdb_tv" || c.ID != "1396" || c.Title != "Breaking Bad" || c.Year != "2008" {
+		t.Fatalf("got %+v", c)
+	}
+	if c.URL != "https://www.themoviedb.org/tv/1396" {
+		t.Fatalf("url=%q", c.URL)
+	}
+	if c.Poster != "https://image.tmdb.org/t/p/w185/ggFHVNu6YYI5L9pCfOacjizRGt.jpg" {
+		t.Fatalf("poster=%q", c.Poster)
+	}
+}
+
 func TestTypedDoesNotFallBackToUnlisted(t *testing.T) {
 	var tv atomic.Int32
 	tvmaze := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -412,7 +536,7 @@ func TestPacedRetriesRespectInterval(t *testing.T) {
 		HTTP: config.HTTP{
 			TimeoutMS:         5000,
 			Retries:           3,
-			BackoffMS:         []int{1, 1, 1},
+			Backoff:           config.ExpRange{MinExp: 0, MaxExp: 2},
 			ProviderTimeoutMS: 1000,
 		},
 		Providers: map[string]config.Provider{
@@ -480,6 +604,48 @@ func TestCandidateFromSynopsisPoster(t *testing.T) {
 	}
 	if c.Year != "2012" {
 		t.Fatalf("year=%q", c.Year)
+	}
+}
+
+func TestCandidateFromPosterPrefix(t *testing.T) {
+	item := map[string]any{
+		"id":           550,
+		"title":        "Fight Club",
+		"release_date": "1999-10-15",
+		"poster_path":  "/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
+	}
+	spec := config.Provider{
+		Fields: map[string]string{
+			"id":     "id",
+			"title":  "title",
+			"year":   "release_date",
+			"url":    "id",
+			"poster": "poster_path",
+		},
+		Year:         "prefix4",
+		URLPrefix:    "https://www.themoviedb.org/movie/",
+		PosterPrefix: "https://image.tmdb.org/t/p/w185",
+	}
+	c, ok := candidateFrom("tmdb", spec, item)
+	if !ok {
+		t.Fatal("expected candidate")
+	}
+	if c.Year != "1999" {
+		t.Fatalf("year=%q", c.Year)
+	}
+	if c.URL != "https://www.themoviedb.org/movie/550" {
+		t.Fatalf("url=%q", c.URL)
+	}
+	if c.Poster != "https://image.tmdb.org/t/p/w185/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg" {
+		t.Fatalf("poster=%q", c.Poster)
+	}
+	empty := map[string]any{"id": 1, "title": "No Poster"}
+	c, ok = candidateFrom("tmdb", spec, empty)
+	if !ok {
+		t.Fatal("expected candidate")
+	}
+	if c.Poster != "" {
+		t.Fatalf("empty poster=%q", c.Poster)
 	}
 }
 

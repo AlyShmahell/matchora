@@ -38,7 +38,7 @@ Dist is binary + `config/` + `public/` only.
 
 ## Data and llama
 
-`data_dir` defaults to `{exeDir}/data`. Empty `browse_root` follows `data_dir`. Provider keys live in `{data_dir}/secrets` (file name `secrets`, YAML map). Missing file or key leaves that provider off.
+`data_dir` defaults to `{exeDir}/data`. Empty `browse_root` follows `data_dir`. Provider keys live in `{data_dir}/secrets` (file name `secrets`, YAML map). A provider may set `secret:` to reuse another map key. Missing file or key leaves that provider off.
 
 On start the app probes `llama.base_url`. A healthy listener is left alone (external or leftover llama-server). If it is down, matchora downloads `tarball_url` into `{exeDir}/vendor/llama.cpp` when `llama-server` is missing, stages the embed GGUF (and instruct when `LocalInstruct()`) into `vendor/llama.cpp/models`, and spawns one router: `--models-dir` (no `--model`), `--embeddings --pooling mean`, `--ctx-size 8192`, `-ngl` from config. Then it lists models (`/v1/models` and `/models`, `?reload=1` after a download) and `POST /models/load` if the embed/instruct file is still missing from the list. Instruct follows that path only when `llm_base_url` is empty or the same origin as `base_url` (default both `:8080`).
 

@@ -16,7 +16,8 @@ type httpClient struct {
 	hc             *http.Client
 	userAgent      string
 	retries        int
-	backoffs       []time.Duration
+	backoffMin     int
+	backoffMax     int
 	attemptTimeout time.Duration
 }
 
@@ -30,11 +31,13 @@ func newHTTP(cfg config.Config) *httpClient {
 	if attempt <= 0 {
 		attempt = 10 * time.Second
 	}
+	br := cfg.HTTPBackoff()
 	return &httpClient{
 		hc:             &http.Client{Timeout: timeout},
 		userAgent:      "matchora/" + cfg.Version + " (+https://github.com/alyshmahell/matchora)",
 		retries:        retries,
-		backoffs:       cfg.Backoffs(),
+		backoffMin:     br.MinExp,
+		backoffMax:     br.MaxExp,
 		attemptTimeout: attempt,
 	}
 }
@@ -92,7 +95,7 @@ func (c *httpClient) do(ctx context.Context, method, url, contentType string, bo
 		if canRetry && retryableStatus(resp.StatusCode) && attempt < c.retries-1 {
 			lastErr = fmt.Errorf("status %d from %s", resp.StatusCode, url)
 			lastCode = resp.StatusCode
-			if err := sleepBackoff(ctx, c.backoff(attempt), retryAfter(resp)); err != nil {
+			if err := sleepBackoff(ctx, c.backoff(attempt), retryAfter(resp, c.backoffMax)); err != nil {
 				return nil, resp.StatusCode, err
 			}
 			continue
@@ -103,10 +106,11 @@ func (c *httpClient) do(ctx context.Context, method, url, contentType string, bo
 }
 
 func (c *httpClient) backoff(attempt int) time.Duration {
-	if attempt >= 0 && attempt < len(c.backoffs) {
-		return c.backoffs[attempt]
+	e := c.backoffMin + 1 + attempt
+	if e > c.backoffMax {
+		e = c.backoffMax
 	}
-	return time.Duration(1<<attempt) * time.Second
+	return config.JitterExp(e)
 }
 
 func retryableStatus(code int) bool {
@@ -116,7 +120,7 @@ func retryableStatus(code int) bool {
 		code == http.StatusGatewayTimeout
 }
 
-func retryAfter(resp *http.Response) time.Duration {
+func retryAfter(resp *http.Response, maxExp int) time.Duration {
 	if resp == nil {
 		return 0
 	}
@@ -125,8 +129,15 @@ func retryAfter(resp *http.Response) time.Duration {
 		return 0
 	}
 	d := time.Duration(n) * time.Second
-	if d > 8*time.Second {
-		return 8 * time.Second
+	if maxExp < 0 {
+		maxExp = 0
+	}
+	if maxExp > 62 {
+		maxExp = 62
+	}
+	capd := time.Duration(1<<maxExp) * time.Millisecond
+	if d > capd {
+		return capd
 	}
 	return d
 }

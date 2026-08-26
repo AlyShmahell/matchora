@@ -1,8 +1,10 @@
 http:
   addr: ":7680"
   timeout_ms: 60000
-  retries: 3
-  backoff_ms: [1000, 2000, 4000]
+  retries: 5
+  backoff:
+    min_exp: 10
+    max_exp: 13
   provider_timeout_ms: 10000
 version: "0.0.1"
 ranker: embed
@@ -12,8 +14,10 @@ match:
   min_margin: 0.04
   min_hits: 1
   workers: 8
-  cooldown_fails: 2
-  cooldown_ms: 3600000
+  cooldown_fails: 5
+  cooldown:
+    min_exp: 16
+    max_exp: 19
   prefer:
     anime:
       language: Japanese
@@ -65,18 +69,43 @@ providers:
     types: [anime]
     base: "https://api.jikan.moe/v4"
     url: "{base}/anime"
-    query: { q: "{title}", limit: "8" }
+    query: { q: "{title}", limit: "25", sfw: "false", order_by: "popularity", sort: "asc" }
     items: data
-    fields: { id: mal_id, title: title, year: year, url: url, synopsis: synopsis, poster: images.jpg.image_url }
-    min_interval_ms: 4000
+    fields: { id: mal_id, title: title, year: aired.from, url: url, synopsis: synopsis, poster: images.jpg.image_url }
+    year: prefix4
+    min_interval_ms: 1100
     defer: true
   omdb:
-    types: [movie, tv, ""]
+    types: [movie]
     require: api_key
     base: "https://www.omdbapi.com"
     url: "{base}"
-    query: { apikey: "{api_key}", s: "{title}", type: "{type_param}" }
-    type_params: { movie: movie, tv: series }
+    query: { apikey: "{api_key}", s: "{title}", type: "movie" }
     items: Search
     fields: { id: imdbID, title: Title, year: Year, url: imdbID, poster: Poster }
     url_prefix: "https://www.imdb.com/title/"
+  tmdb:
+    types: [movie, anime]
+    require: api_key
+    defer: true
+    base: "https://api.themoviedb.org/3"
+    url: "{base}/search/movie"
+    query: { api_key: "{api_key}", query: "{title}", include_adult: "false" }
+    items: results
+    fields: { id: id, title: title, year: release_date, url: id, synopsis: overview, poster: poster_path }
+    year: prefix4
+    url_prefix: "https://www.themoviedb.org/movie/"
+    poster_prefix: "https://image.tmdb.org/t/p/w185"
+  tmdb_tv:
+    types: [tv, anime]
+    require: api_key
+    secret: tmdb
+    defer: true
+    base: "https://api.themoviedb.org/3"
+    url: "{base}/search/tv"
+    query: { api_key: "{api_key}", query: "{title}", include_adult: "false" }
+    items: results
+    fields: { id: id, title: name, year: first_air_date, url: id, synopsis: overview, poster: poster_path }
+    year: prefix4
+    url_prefix: "https://www.themoviedb.org/tv/"
+    poster_prefix: "https://image.tmdb.org/t/p/w185"

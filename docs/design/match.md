@@ -7,18 +7,20 @@ Shipped defaults:
 | Provider | Auth | Search |
 |----------|------|--------|
 | [TVMaze](https://www.tvmaze.com/api) | none | `GET /search/shows?q=` — Episode: `/shows/{id}/episodebynumber?season=&number=` |
-| [Jikan v4](https://docs.api.jikan.moe/) | none | `GET /anime?q=` — `min_interval_ms: 4000`, `defer: true` |
-| OMDb | `{data_dir}/secrets` key `omdb` | `?s=` + `type` — skipped when `api_key` is empty (`require: api_key`) |
+| [Jikan v4](https://docs.api.jikan.moe/) | none | `GET /anime?q=` — `limit: 25`, `min_interval_ms: 1100`, `defer: true` |
+| OMDb | `{data_dir}/secrets` key `omdb` | `?s=` + `type=movie` — movies only; skipped when `api_key` is empty (`require: api_key`) |
+| [TMDB](https://developer.themoviedb.org/docs/search-and-query-for-details) movie | `{data_dir}/secrets` key `tmdb` | `GET /3/search/movie` — `defer: true`; skipped when `api_key` is empty |
+| TMDB TV | `secret: tmdb` | `GET /3/search/tv` — `defer: true`; skipped when `api_key` is empty |
 
-Type lists are an allowlist. A typed job only calls providers that list that type. Empty job type still means every provider (scan rows with no type). Defaults: `tv` / `""` → TVMaze (+ OMDb if keyed); `anime` → TVMaze then deferred Jikan; `movie` → OMDb if keyed.
+Type lists are an allowlist. A typed job only calls providers that list that type. Empty job type still means every provider (scan rows with no type). Defaults: `tv` / `""` → TVMaze then deferred TMDB TV; `anime` → TVMaze then deferred TMDB movie / TMDB TV / Jikan; `movie` → OMDb then deferred TMDB movie (if keyed).
 
 `defer: true` providers run only if the fast pass is terrible: fewer than `match.min_hits` candidates (quantity) or best score below `match.min_score` (quality). `match.min_margin` is only for auto-`matched` vs `manual`. Within a pass, provider GETs for that title run in parallel. Untyped jobs may still fall back to providers that did not list `""`. The engine never switches on provider names.
 
 Pending jobs run up to `match.workers` at a time (default `8`; values below 1 become 1). Each job gets its own `http.timeout_ms` clock; a slow deferred call does not hold or cancel the rest of the batch. Provider `min_interval_ms` still paces that provider across those goroutines.
 
-GET retries, backoff, and **per-attempt** timeout (`provider_timeout_ms`) come from the `http` section. Provider search does not wrap all retries in that timeout. POST (embeddings / chat) is not retried. `POST /v1/retry` rematches `status: error` and `status: unmatched` rows.
+GET retries, per-attempt timeout (`provider_timeout_ms`), and **capped exponential backoff** come from the `http` section (`http.backoff.min_exp` / `max_exp`, default 10/13). After a failed GET the wait is uniform random in `[2^(exp-1), 2^exp]` ms, starting at `min_exp+1` and capped at `max_exp`. `Retry-After` still wins when present, capped at `2^max_exp` ms. Provider search does not wrap all retries in that timeout. POST (embeddings / chat) is not retried. `POST /v1/retry` rematches `status: error` and `status: unmatched` rows.
 
-A provider that **errors after retries** on 2 jobs in a row (`match.cooldown_fails`, default 2) is skipped for `match.cooldown_ms` (default 1 hour). A later success resets the streak. Empty 200s do not count. A dead parent context (batch leftover or cancel) is not a failure; a per-attempt timeout while the job context is still alive is. The cooldown list lives on the worker for the process lifetime.
+A provider that **errors after retries** on `match.cooldown_fails` jobs in a row (default 2 if unset; shipped YAML is 5) is skipped for a jittered cooldown from `match.cooldown.min_exp` / `max_exp` (default 16/19: first skip ~1–2 min, cap ~4.4–8.7 min). Each cooldown start bumps the exponent; a later success resets streak and exponent. Empty 200s do not count. A dead parent context (batch leftover or cancel) is not a failure; a per-attempt timeout while the job context is still alive is. The cooldown list lives on the worker for the process lifetime.
 
 After rank, auto-`matched` only if `score >= match.min_score` and the gap to second is `>= match.min_margin` (or a single candidate). Otherwise `status: manual`; the user picks via `POST /v1/jobs/{id}/select`. Zero hits stay `unmatched`.
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -40,11 +41,11 @@ type Ingest struct {
 }
 
 type HTTP struct {
-	Addr              string `yaml:"addr"`
-	TimeoutMS         int    `yaml:"timeout_ms"`
-	Retries           int    `yaml:"retries"`
-	BackoffMS         []int  `yaml:"backoff_ms"`
-	ProviderTimeoutMS int    `yaml:"provider_timeout_ms"`
+	Addr              string   `yaml:"addr"`
+	TimeoutMS         int      `yaml:"timeout_ms"`
+	Retries           int      `yaml:"retries"`
+	Backoff           ExpRange `yaml:"backoff"`
+	ProviderTimeoutMS int      `yaml:"provider_timeout_ms"`
 }
 
 type Match struct {
@@ -54,8 +55,13 @@ type Match struct {
 	MinHits       int                          `yaml:"min_hits"`
 	Workers       int                          `yaml:"workers"`
 	CooldownFails int                          `yaml:"cooldown_fails"`
-	CooldownMS    int                          `yaml:"cooldown_ms"`
+	Cooldown      ExpRange                     `yaml:"cooldown"`
 	Prefer        map[string]map[string]string `yaml:"prefer"`
+}
+
+type ExpRange struct {
+	MinExp int `yaml:"min_exp"`
+	MaxExp int `yaml:"max_exp"`
 }
 
 type Llama struct {
@@ -77,6 +83,7 @@ type Llama struct {
 type Provider struct {
 	Types         []string          `yaml:"types"`
 	Require       string            `yaml:"require"`
+	Secret        string            `yaml:"secret"`
 	APIKey        string            `yaml:"-"`
 	Base          string            `yaml:"base"`
 	URL           string            `yaml:"url"`
@@ -85,6 +92,7 @@ type Provider struct {
 	Fields        map[string]string `yaml:"fields"`
 	Year          string            `yaml:"year"`
 	URLPrefix     string            `yaml:"url_prefix"`
+	PosterPrefix  string            `yaml:"poster_prefix"`
 	MinIntervalMS int               `yaml:"min_interval_ms"`
 	Defer         bool              `yaml:"defer"`
 	TypeParams    map[string]string `yaml:"type_params"`
@@ -169,6 +177,7 @@ func Load(path string) (Config, error) {
 		cfg.Providers = map[string]Provider{}
 	}
 	cfg.ConfigPath = path
+	cfg.clamp()
 	applySecrets(&cfg)
 	return cfg, nil
 }
@@ -289,11 +298,46 @@ func (c Config) MatchCooldownFails() int {
 	return c.Match.CooldownFails
 }
 
-func (c Config) MatchCooldown() time.Duration {
-	if c.Match.CooldownMS <= 0 {
-		return time.Hour
+func (c Config) MatchCooldown() ExpRange {
+	return ClampExp(c.Match.Cooldown, 16, 19)
+}
+
+func (c Config) HTTPBackoff() ExpRange {
+	return ClampExp(c.HTTP.Backoff, 10, 13)
+}
+
+func (c *Config) clamp() {
+	c.HTTP.Backoff = c.HTTPBackoff()
+	c.Match.Cooldown = c.MatchCooldown()
+}
+
+func ClampExp(r ExpRange, defMin, defMax int) ExpRange {
+	if r.MinExp == 0 && r.MaxExp == 0 {
+		r.MinExp, r.MaxExp = defMin, defMax
 	}
-	return time.Duration(c.Match.CooldownMS) * time.Millisecond
+	if r.MinExp < 0 {
+		r.MinExp = 0
+	}
+	if r.MaxExp < r.MinExp+2 {
+		r.MaxExp = r.MinExp + 2
+	}
+	return r
+}
+
+func JitterExp(exp int) time.Duration {
+	if exp < 1 {
+		exp = 1
+	}
+	if exp > 62 {
+		exp = 62
+	}
+	lo := int64(1) << (exp - 1)
+	hi := int64(1) << exp
+	n := lo
+	if hi > lo {
+		n = lo + rand.Int64N(hi-lo+1)
+	}
+	return time.Duration(n) * time.Millisecond
 }
 
 func (c Config) HTTPTimeout() time.Duration {
@@ -310,17 +354,6 @@ func (c Config) ProviderTimeout() time.Duration {
 	return time.Duration(c.HTTP.ProviderTimeoutMS) * time.Millisecond
 }
 
-func (c Config) Backoffs() []time.Duration {
-	if len(c.HTTP.BackoffMS) == 0 {
-		return []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
-	}
-	out := make([]time.Duration, len(c.HTTP.BackoffMS))
-	for i, ms := range c.HTTP.BackoffMS {
-		out[i] = time.Duration(ms) * time.Millisecond
-	}
-	return out
-}
-
 func applySecrets(cfg *Config) {
 	b, err := os.ReadFile(filepath.Join(cfg.DataDir, "secrets"))
 	if err != nil || len(b) == 0 {
@@ -330,12 +363,16 @@ func applySecrets(cfg *Config) {
 	if err := yaml.Unmarshal(b, &keys); err != nil {
 		return
 	}
-	for name, key := range keys {
-		p, ok := cfg.Providers[name]
+	for name, p := range cfg.Providers {
+		keyName := name
+		if s := strings.TrimSpace(p.Secret); s != "" {
+			keyName = s
+		}
+		k, ok := keys[keyName]
 		if !ok {
 			continue
 		}
-		p.APIKey = strings.TrimSpace(key)
+		p.APIKey = strings.TrimSpace(k)
 		cfg.Providers[name] = p
 	}
 }

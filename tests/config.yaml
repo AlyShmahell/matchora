@@ -7,3 +7,7 @@ providers:
     base: "http://stub:8080"
   omdb:
     base: "http://stub:8080"
+  tmdb:
+    base: "http://stub:8080"
+  tmdb_tv:
+    base: "http://stub:8080"

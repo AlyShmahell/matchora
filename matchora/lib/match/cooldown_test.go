@@ -17,10 +17,10 @@ func always504Config(url string) config.Config {
 		HTTP: config.HTTP{
 			TimeoutMS:         5000,
 			Retries:           2,
-			BackoffMS:         []int{1, 1},
+			Backoff:           config.ExpRange{MinExp: 0, MaxExp: 2},
 			ProviderTimeoutMS: 200,
 		},
-		Match: config.Match{CooldownFails: 2, CooldownMS: 3600000},
+		Match: config.Match{CooldownFails: 2, Cooldown: config.ExpRange{MinExp: 10, MaxExp: 12}},
 		Providers: map[string]config.Provider{
 			"slow": {
 				Types:  []string{"tv", ""},
@@ -108,7 +108,7 @@ func TestCircuitExpiresAfterTTL(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	cfg := always504Config(srv.URL)
-	cfg.Match.CooldownMS = 30
+	cfg.Match.Cooldown = config.ExpRange{MinExp: 5, MaxExp: 7}
 	cfg.HTTP.Retries = 1
 	cool := NewCircuit()
 	ctx := WithCircuit(context.Background(), cool)
@@ -125,7 +125,7 @@ func TestCircuitExpiresAfterTTL(t *testing.T) {
 	if n.Load() != hits {
 		t.Fatal("called during cooldown")
 	}
-	time.Sleep(40 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 	collectProviders(ctx, cfg, httpc, job, true, false)
 	if n.Load() <= hits {
 		t.Fatalf("expected call after ttl, hits=%d then %d", hits, n.Load())
@@ -154,6 +154,22 @@ func TestCircuitIgnoresExpiredContext(t *testing.T) {
 	}
 	if cool.Cooling("slow") {
 		t.Fatal("parent deadline must not cool")
+	}
+}
+
+func TestCircuitOKResetsExponent(t *testing.T) {
+	cool := NewCircuit()
+	cool.Fail("p", 1, 0, 2)
+	if !cool.Cooling("p") {
+		t.Fatal("expected cooling")
+	}
+	cool.OK("p")
+	if cool.Cooling("p") {
+		t.Fatal("OK should drop cooldown")
+	}
+	cool.Fail("p", 1, 0, 2)
+	if !cool.Cooling("p") {
+		t.Fatal("next cooldown should start again")
 	}
 }
 

@@ -37,3 +37,4 @@ matchora/.env
 # Editor/IDE
 .idea/
 .vscode/
+secrets
