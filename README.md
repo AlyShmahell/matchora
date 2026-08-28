@@ -14,7 +14,7 @@ Pick **run** to start the current `build/dist/` tree. Pick **(re)build & run** t
 
 Pick **(re)build & prepare** to install llama.cpp and GGUFs into `{exeDir}/vendor/llama.cpp`, then exit.
 
-Pick **(re)build & package** to write `build/package/matchora-*-linux-amd64.tar.gz` (archive root `matchora/`).
+Pick **(re)build & package** to write two archives (root `matchora/`, each with `LICENSE`): `build/package/matchora-*-linux-amd64.tar.gz` (binary, `config/`, `public/`) and `matchora-*-linux-amd64-llama.tar.gz` (same plus llama.cpp, GGUFs, and their licenses). Package runs `--prepare` and fetches those third-party licenses.
 
 ## Layout
 
@@ -23,7 +23,7 @@ Pick **(re)build & package** to write `build/package/matchora-*-linux-amd64.tar.
 | `matchora/` | App, `share/config/`, GUI source |
 | `build/` | Containerfile + compose (dist builder) and `run` |
 | `build/dist/` | Unpackaged linux/amd64 tree (binary, `config/`, `public/`) |
-| `build/package/` | Compressed tarball of that tree |
+| `build/package/` | Slim and `-llama` tarballs of that tree |
 | `tests/` | Podman smoke + live harness |
 | `docs/` | [Architecture](docs/architecture.md), [workflow](docs/dev/workflow.md), [match](docs/design/match.md), [gui](docs/design/gui.md) |
 

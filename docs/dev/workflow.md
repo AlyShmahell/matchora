@@ -1,6 +1,6 @@
 # Workflow
 
-Container toolchains only. Do not run host `go`, `curl`, or browsers against this repo’s automated path. Podman-first (`Containerfile` spelling). Images are pulled on first compose build.
+Container toolchains only. Do not run host `go` or browsers against this repo’s automated path. Podman-first (`Containerfile` spelling). Images are pulled on first compose build. The packager uses host `curl` to fetch third-party licenses into the `-llama` tarball.
 
 ## Dist
 
@@ -12,7 +12,7 @@ Container toolchains only. Do not run host `go`, `curl`, or browsers against thi
 ./build/run
 ```
 
-Choose **run**, **(re)build & run**, **(re)build & prepare**, or **(re)build & package** (arrow keys, Enter). **run** execs the current `build/dist/matchora` (error if missing). The rebuild options refresh `build/dist/` first. Prepare runs `matchora --prepare`. Package writes `build/package/matchora-<version>-linux-amd64.tar.gz` with archive root `matchora/`.
+Choose **run**, **(re)build & run**, **(re)build & prepare**, or **(re)build & package** (arrow keys, Enter). **run** execs the current `build/dist/matchora` (error if missing). The rebuild options refresh `build/dist/` first. Prepare runs `matchora --prepare`. Package writes two archives with root `matchora/` and Matchora’s `LICENSE`: `build/package/matchora-<version>-linux-amd64.tar.gz` (binary, `config/`, `public/`) and `matchora-<version>-linux-amd64-llama.tar.gz` (same plus `vendor/llama.cpp` and fetched llama.cpp / GGUF licenses). The `-llama` tarball runs `--prepare` then `curl`s those licenses from GitHub and Hugging Face.
 
 Admin console: http://127.0.0.1:7680
 

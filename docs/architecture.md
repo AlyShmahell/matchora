@@ -14,10 +14,10 @@ Matchora ingests title rows or scans a library path, searches metadata APIs defi
 | `build/` | Podman dist builder (Containerfile, compose, `run`) |
 | `{exeDir}/public` | served admin UI |
 | `{exeDir}/data` | `jobs.json`, optional `secrets` and `config.yaml` overlay; matched titles under `catalog/` as NFO trees |
-| `{exeDir}/vendor/llama.cpp` | runtime llama-server + GGUFs (not in dist) |
+| `{exeDir}/vendor/llama.cpp` | runtime llama-server + GGUFs (not in dist; included in the `-llama` tarball with fetched licenses) |
 | `tests/` | smoke (stub metadata + stub chat cleanup) + live profile |
 
-Dist is binary + `config/` + `public/` only.
+Dist is binary + `config/` + `public/` only. The packager’s slim tarball is that tree plus `LICENSE`. The `-llama` tarball also includes `{exeDir}/vendor/llama.cpp` (runtime, GGUFs) and licenses fetched at pack time.
 
 ## HTTP
 
