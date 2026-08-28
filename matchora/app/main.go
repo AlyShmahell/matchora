@@ -17,6 +17,7 @@ import (
 	matchfs "github.com/alyshmahell/matchora/lib/fs"
 	"github.com/alyshmahell/matchora/lib/ingest"
 	"github.com/alyshmahell/matchora/lib/jobs"
+	"github.com/alyshmahell/matchora/lib/library"
 	"github.com/alyshmahell/matchora/lib/llama"
 	"github.com/alyshmahell/matchora/lib/match"
 	"github.com/alyshmahell/matchora/lib/scan"
@@ -55,6 +56,7 @@ func main() {
 	store := jobs.New(cfg.DataDir)
 	worker := jobs.NewWorker(cfg, store)
 	scans := newScanRun()
+	worker.Kick()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -88,12 +90,15 @@ func main() {
 	})
 	mux.HandleFunc("POST /v1/scan", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Path string `json:"path"`
+			Path                string `json:"path"`
+			SkipEpisodePosters  bool   `json:"skip_episode_posters"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path required"})
 			return
 		}
+		skip := skipEpisodePosters(r) || body.SkipEpisodePosters
+		worker.SetSkipEpisodePosters(skip)
 		videos, err := scan.ListVideos(cfg.BrowseRoot, body.Path)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -138,6 +143,7 @@ func main() {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		worker.SetSkipEpisodePosters(skipEpisodePosters(r))
 		worker.Kick()
 		writeJSON(w, http.StatusAccepted, created)
 	})
@@ -147,6 +153,7 @@ func main() {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		worker.SetSkipEpisodePosters(skipEpisodePosters(r))
 		worker.Kick()
 		writeJSON(w, http.StatusAccepted, list)
 	})
@@ -164,35 +171,120 @@ func main() {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		worker.SetSkipEpisodePosters(skipEpisodePosters(r))
 		worker.Kick()
 		writeJSON(w, http.StatusAccepted, list)
 	})
 	mux.HandleFunc("POST /v1/jobs/{id}/select", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Provider string `json:"provider"`
-			ID       string `json:"id"`
+			Provider           string `json:"provider"`
+			ID                 string `json:"id"`
+			SkipEpisodePosters bool   `json:"skip_episode_posters"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Provider == "" || body.ID == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider and id required"})
 			return
 		}
+		skip := skipEpisodePosters(r) || body.SkipEpisodePosters
+		worker.SetSkipEpisodePosters(skip)
 		job, err := store.Get(r.PathValue("id"))
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), cfg.HTTPTimeout())
+		ctx = match.WithReporter(ctx, worker.Reporter())
+		ctx = match.WithJob(ctx, job)
 		done, err := match.ApplySelect(ctx, cfg, job, body.Provider, body.ID)
-		cancel()
 		if err != nil {
+			cancel()
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 		if err := store.Update(map[string]match.Job{done.ID: done}); err != nil {
+			cancel()
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		if done.Match != nil {
+			if err := library.Save(ctx, cfg, done, *done.Match, skip); err != nil {
+				log.Printf("library: save: %v", err)
+			}
+		}
+		cancel()
 		writeJSON(w, http.StatusOK, done)
+	})
+	mux.HandleFunc("POST /v1/jobs/{id}/catalog", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Provider           string `json:"provider"`
+			ID                 string `json:"id"`
+			SkipEpisodePosters bool   `json:"skip_episode_posters"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Provider == "" || body.ID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider and id required"})
+			return
+		}
+		skip := skipEpisodePosters(r) || body.SkipEpisodePosters
+		worker.SetSkipEpisodePosters(skip)
+		job, err := store.Get(r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), cfg.HTTPTimeout())
+		ctx = match.WithReporter(ctx, worker.Reporter())
+		ctx = match.WithJob(ctx, job)
+		done, err := match.ApplyCatalog(ctx, cfg, job, body.Provider, body.ID)
+		if err != nil {
+			cancel()
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := store.Update(map[string]match.Job{done.ID: done}); err != nil {
+			cancel()
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if cand, ok := match.LookupCandidate(done, body.Provider, body.ID); ok {
+			if err := library.Save(ctx, cfg, done, cand, skip); err != nil {
+				log.Printf("library: save: %v", err)
+			}
+		}
+		cancel()
+		writeJSON(w, http.StatusOK, done)
+	})
+	mux.HandleFunc("GET /v1/catalog", func(w http.ResponseWriter, r *http.Request) {
+		list, err := library.List(cfg.DataDir)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	})
+	mux.HandleFunc("GET /v1/catalog/{provider}/{id}", func(w http.ResponseWriter, r *http.Request) {
+		got, err := library.Get(cfg, r.PathValue("provider"), r.PathValue("id"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, got)
+	})
+	mux.HandleFunc("GET /v1/catalog/{provider}/{id}/{path...}", func(w http.ResponseWriter, r *http.Request) {
+		season, episode, ok := parseCatalogFile(r.PathValue("path"))
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		path, err := library.PosterFile(cfg, r.PathValue("provider"), r.PathValue("id"), season, episode)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		http.ServeFile(w, r, path)
 	})
 
 	public := filepath.Join(exeDir, "public")
@@ -204,6 +296,27 @@ func main() {
 	log.Printf("matchora %s listening on %s (data=%s ranker=%s)", cfg.Version, cfg.HTTP.Addr, cfg.DataDir, cfg.Ranker)
 	if err := http.ListenAndServe(cfg.HTTP.Addr, mux); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func parseCatalogFile(rest string) (season, episode string, ok bool) {
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	isPoster := func(name string) bool {
+		return strings.HasPrefix(strings.ToLower(name), "poster.")
+	}
+	switch {
+	case len(parts) == 1 && isPoster(parts[0]):
+		return "", "", true
+	case len(parts) == 3 && parts[0] == "seasons" && isPoster(parts[2]):
+		return parts[1], "", true
+	case len(parts) == 5 && parts[0] == "seasons" && parts[2] == "episodes" && isPoster(parts[4]):
+		return parts[1], parts[3], true
+	default:
+		return "", "", false
 	}
 }
 
@@ -230,6 +343,22 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func skipEpisodePosters(r *http.Request) bool {
+	if truthyFlag(r.URL.Query().Get("skip_episode_posters")) {
+		return true
+	}
+	return truthyFlag(r.FormValue("skip_episode_posters"))
+}
+
+func truthyFlag(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 func enqueueScan(ctx context.Context, cfg config.Config, store *jobs.Store, worker *jobs.Worker, scans *scanRun, children []scan.Child) {

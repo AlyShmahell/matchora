@@ -9,11 +9,11 @@ Matchora ingests title rows or scans a library path, searches metadata APIs defi
 | `matchora/app` | HTTP server (`-config`, `--prepare`) |
 | `matchora/lib/config` | YAML loader (`-config` path, default `{exeDir}/config/default.yaml`); `prompt.md` and `ingest.md` are siblings of that file |
 | `matchora/share/config` | Seed `default.yaml` + `prompt.md` + `ingest.md` copied into `build/dist/config` |
-| `matchora/lib` | fs, ingest, jobs, llama runtime, match, scan |
+| `matchora/lib` | fs, ingest, jobs, library (NFO catalog), llama runtime, match, scan |
 | `matchora/gui` | admin console source; copied to `build/dist/public` |
 | `build/` | Podman dist builder (Containerfile, compose, `run`) |
 | `{exeDir}/public` | served admin UI |
-| `{exeDir}/data` | `jobs.json`, optional `secrets` and `config.yaml` overlay |
+| `{exeDir}/data` | `jobs.json`, optional `secrets` and `config.yaml` overlay; matched titles under `catalog/` as NFO trees |
 | `{exeDir}/vendor/llama.cpp` | runtime llama-server + GGUFs (not in dist) |
 | `tests/` | smoke (stub metadata + stub chat cleanup) + live profile |
 
@@ -35,10 +35,15 @@ Dist is binary + `config/` + `public/` only.
 | POST | `/v1/match` | rematch all jobs in background (`202`) |
 | POST | `/v1/retry` | rematch `error` and `unmatched` jobs (`202`) |
 | POST | `/v1/jobs/{id}/select` | confirm a candidate on a `manual` row |
+| POST | `/v1/jobs/{id}/catalog` | fetch seasons/episodes for a candidate without changing the match |
+| GET | `/v1/catalog` | persisted titles from `{data_dir}/catalog` |
+| GET | `/v1/catalog/{provider}/{id}` | one persisted title (NFO tree); 404 if missing |
 
 ## Data and llama
 
 `data_dir` defaults to `{exeDir}/data`. Empty `browse_root` follows `data_dir`. Provider keys live in `{data_dir}/secrets` (file name `secrets`, YAML map). A provider may set `secret:` to reuse another map key. Missing file or key leaves that provider off.
+
+Matched, selected, and cataloged titles are written under `{data_dir}/catalog` as `[uniqueid-id] Title (Year)/` directories with `.nfo` files and downloaded posters. Provider YAML `uniqueid` is the folder prefix and `<uniqueid type>` (for example `tmdb-movie` vs `tmdb-tv` so ids cannot collide). If `uniqueid` is omitted, the YAML provider key is used as-is. `GET /v1/catalog` lists them; `GET /v1/catalog/{provider}/{id}` returns one title (seasons/episodes when present). Poster files are served at `/v1/catalog/{provider}/{id}/poster.jpg` (and season/episode variants). Clearing jobs does not delete this tree.
 
 On start the app probes `llama.base_url`. A healthy listener is left alone (external or leftover llama-server). If it is down, matchora downloads `tarball_url` into `{exeDir}/vendor/llama.cpp` when `llama-server` is missing, stages the embed GGUF (and instruct when `LocalInstruct()`) into `vendor/llama.cpp/models`, and spawns one router: `--models-dir` (no `--model`), `--embeddings --pooling mean`, `--ctx-size 8192`, `-ngl` from config. Then it lists models (`/v1/models` and `/models`, `?reload=1` after a download) and `POST /models/load` if the embed/instruct file is still missing from the list. Instruct follows that path only when `llm_base_url` is empty or the same origin as `base_url` (default both `:8080`).
 

@@ -304,3 +304,34 @@ func TestEmbedInstructModelIDs(t *testing.T) {
 		t.Fatalf("instruct override=%q", got)
 	}
 }
+
+func TestLoadProviderOptionalFields(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "default.yaml")
+	raw := "data_dir: " + strconv.Quote(dir) + `
+providers:
+  src:
+    retries: 1
+    provider_timeout_ms: 4000
+    nfo: movie
+    uniqueid: tmdb
+    detail:
+      url: "{base}"
+      query: { i: "{id}" }
+      fields: { synopsis: Plot }
+`
+	if err := os.WriteFile(yamlPath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.Providers["src"]
+	if p.Retries != 1 || p.ProviderTimeoutMS != 4000 || p.NFO != "movie" || p.UniqueID != "tmdb" {
+		t.Fatalf("provider=%+v", p)
+	}
+	if p.Detail == nil || p.Detail.Fields["synopsis"] != "Plot" || p.Detail.Query["i"] != "{id}" {
+		t.Fatalf("detail=%+v", p.Detail)
+	}
+}

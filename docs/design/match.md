@@ -6,11 +6,11 @@ Shipped defaults:
 
 | Provider | Auth | Search |
 |----------|------|--------|
-| [TVMaze](https://www.tvmaze.com/api) | none | `GET /search/shows?q=` — Episode: `/shows/{id}/episodebynumber?season=&number=` |
-| [Jikan v4](https://docs.api.jikan.moe/) | none | `GET /anime?q=` — `limit: 25`, `min_interval_ms: 1100`, `defer: true` |
+| [TVMaze](https://www.tvmaze.com/api) | none | `GET /search/shows?q=` — Episode: `/shows/{id}/episodebynumber?season=&number=` — Catalog: `/shows/{id}/seasons` plus `/shows/{id}/episodes` grouped by season |
+| [Jikan v4](https://docs.api.jikan.moe/) | none | `GET /anime?q=` — `limit: 25`, `min_interval_ms: 1100`, `retries: 1`, `provider_timeout_ms: 4000`, `defer: true` |
 | OMDb | `{data_dir}/secrets` key `omdb` | `?s=` + `type=movie` — movies only; skipped when `api_key` is empty (`require: api_key`) |
 | [TMDB](https://developer.themoviedb.org/docs/search-and-query-for-details) movie | `{data_dir}/secrets` key `tmdb` | `GET /3/search/movie` — `defer: true`; skipped when `api_key` is empty |
-| TMDB TV | `secret: tmdb` | `GET /3/search/tv` — `defer: true`; skipped when `api_key` is empty |
+| TMDB TV | `secret: tmdb` | `GET /3/search/tv` — `defer: true`; skipped when `api_key` is empty — Catalog: show `seasons`, then `/tv/{id}/season/{season}` |
 
 Type lists are an allowlist. A typed job only calls providers that list that type. Empty job type still means every provider (scan rows with no type). Defaults: `tv` / `""` → TVMaze then deferred TMDB TV; `anime` → TVMaze then deferred TMDB movie / TMDB TV / Jikan; `movie` → OMDb then deferred TMDB movie (if keyed).
 
@@ -18,11 +18,17 @@ Type lists are an allowlist. A typed job only calls providers that list that typ
 
 Pending jobs run up to `match.workers` at a time (default `8`; values below 1 become 1). Each job gets its own `http.timeout_ms` clock; a slow deferred call does not hold or cancel the rest of the batch. Provider `min_interval_ms` still paces that provider across those goroutines.
 
-GET retries, per-attempt timeout (`provider_timeout_ms`), and **capped exponential backoff** come from the `http` section (`http.backoff.min_exp` / `max_exp`, default 10/13). After a failed GET the wait is uniform random in `[2^(exp-1), 2^exp]` ms, starting at `min_exp+1` and capped at `max_exp`. `Retry-After` still wins when present, capped at `2^max_exp` ms. Provider search does not wrap all retries in that timeout. POST (embeddings / chat) is not retried. `POST /v1/retry` rematches `status: error` and `status: unmatched` rows.
+GET retries, per-attempt timeout (`provider_timeout_ms`), and **capped exponential backoff** come from the `http` section (`http.backoff.min_exp` / `max_exp`, default 10/13). A provider may set `retries` and/or `provider_timeout_ms` to override those values for its own GETs (search, episode, catalog, detail, poster). Zero or omitted keeps the global `http` values. After a failed GET the wait is uniform random in `[2^(exp-1), 2^exp]` ms, starting at `min_exp+1` and capped at `max_exp`. `Retry-After` still wins when present, capped at `2^max_exp` ms. Provider search does not wrap all retries in that timeout. POST (embeddings / chat) is not retried. `POST /v1/retry` rematches `status: error` and `status: unmatched` rows.
 
 A provider that **errors after retries** on `match.cooldown_fails` jobs in a row (default 2 if unset; shipped YAML is 5) is skipped for a jittered cooldown from `match.cooldown.min_exp` / `max_exp` (default 16/19: first skip ~1–2 min, cap ~4.4–8.7 min). Each cooldown start bumps the exponent; a later success resets streak and exponent. Empty 200s do not count. A dead parent context (batch leftover or cancel) is not a failure; a per-attempt timeout while the job context is still alive is. The cooldown list lives on the worker for the process lifetime.
 
 After rank, auto-`matched` only if `score >= match.min_score` and the gap to second is `>= match.min_margin` (or a single candidate). Otherwise `status: manual`; the user picks via `POST /v1/jobs/{id}/select`. Zero hits stay `unmatched`.
+
+An optional YAML `catalog` block on a provider lists seasons and episodes with the same GET + JSON-path walker (`url`, `query`, `items`, `fields`, `year`, `poster_prefix`). Vars include `{id}`, `{season}`, `{season_id}`. If `episodes.url` contains `{season}` or `{season_id}`, the engine GETs once per season; otherwise one episodes dump is grouped by `fields.season`. Auto-match and `select` fetch the catalog for the chosen title. `POST /v1/jobs/{id}/catalog` `{provider,id}` loads it for any candidate on the job without changing `match` or `status`. `catalog: null` means not loaded; `[]` means loaded nothing. After pending work, the worker backfills `matched` jobs whose match provider has a catalog block and `catalog` is still null. `POST /v1/match` and retry clear catalog fields. Movies and providers without the block skip.
+
+Matched, selected, and cataloged titles are also written under `{data_dir}/catalog` as `[uniqueid-id] Title (Year)/` with `tvshow.nfo` or `movie.nfo`, season folders, episode `.nfo` files, and downloaded posters. Optional `uniqueid` is both the folder prefix and `<uniqueid type>` (shipped: TMDB movie `tmdb-movie`, TMDB TV `tmdb-tv`, OMDb `imdb`). If omitted, the YAML provider key is used unchanged. Other optional keys: `nfo: movie|tvshow` (which root file to write), `detail` (same shape as `episode:` — GET after match/select and merge empty fields, used for OMDb plot). Job `type` is stored as `<type>` on the root NFO. `GET /v1/catalog` and `GET /v1/catalog/{provider}/{id}` read that tree, not `jobs.json` (`{provider}` may be the YAML key or the `uniqueid` slug).
+
+Requests that persist that tree (`POST /v1/ingest`, `/v1/scan`, `/v1/match`, `/v1/retry`, `/v1/jobs/{id}/select`, `/v1/jobs/{id}/catalog`) accept `skip_episode_posters` (query `true`/`1`, JSON body, or ingest form field). When true, episode image GETs are skipped; title/movie and season posters still download. Episode `.nfo` files are still written.
 
 Stdlib HTTP. User-Agent `matchora/{version}`.
 

@@ -8,7 +8,10 @@ import (
 	"github.com/alyshmahell/matchora/lib/config"
 )
 
-var ErrNotImplemented = errors.New("not_implemented")
+var (
+	ErrNotImplemented    = errors.New("not_implemented")
+	errCandidateNotFound = errors.New("candidate not found")
+)
 
 func Match(query string, candidates []Candidate) ([]Candidate, error) {
 	_, _ = query, candidates
@@ -20,7 +23,7 @@ func Run(ctx context.Context, cfg config.Config, jobs []Job) []Job {
 }
 
 func RunWith(ctx context.Context, cfg config.Config, jobs []Job, rep Reporter) []Job {
-	ctx = withReporter(ctx, rep)
+	ctx = WithReporter(ctx, rep)
 	httpc := newHTTP(cfg)
 	out := make([]Job, len(jobs))
 	for i, job := range jobs {
@@ -112,7 +115,8 @@ func finishRank(ctx context.Context, cfg config.Config, httpc *httpClient, job J
 	if sub := fetchEpisode(ctx, cfg, httpc, job, best); sub != nil {
 		job.Sub = sub
 	}
-	return job
+	fetchDetail(ctx, cfg, httpc, job, job.Match)
+	return attachCatalog(ctx, cfg, httpc, job, *job.Match)
 }
 
 func autoMatch(cfg config.Config, ranked []Candidate) bool {
@@ -172,7 +176,7 @@ func ApplySelect(ctx context.Context, cfg config.Config, job Job, provider, id s
 		}
 	}
 	if pick == nil {
-		return job, errors.New("candidate not found")
+		return job, errCandidateNotFound
 	}
 	job.Match = pick
 	job.Status = "matched"
@@ -181,5 +185,6 @@ func ApplySelect(ctx context.Context, cfg config.Config, job Job, provider, id s
 	if sub := fetchEpisode(ctx, cfg, httpc, job, *pick); sub != nil {
 		job.Sub = sub
 	}
-	return job, nil
+	fetchDetail(ctx, cfg, httpc, job, job.Match)
+	return attachCatalog(ctx, cfg, httpc, job, *job.Match), nil
 }

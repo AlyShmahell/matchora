@@ -1,8 +1,43 @@
 const $ = (id) => document.getElementById(id);
 
+const skipEpisodePostersKey = "matchora.skip_episode_posters";
+
 let pendingTimer = null;
 let waitTick = null;
 let waitRows = [];
+
+function skipEpisodePosters() {
+  const el = $("skip-episode-posters");
+  return !!(el && el.checked);
+}
+
+function withSkipFlag(url) {
+  if (!skipEpisodePosters()) {
+    return url;
+  }
+  const u = new URL(url, location.origin);
+  u.searchParams.set("skip_episode_posters", "true");
+  return u.pathname + u.search;
+}
+
+function skipPayload(extra) {
+  const body = extra || {};
+  if (skipEpisodePosters()) {
+    body.skip_episode_posters = true;
+  }
+  return body;
+}
+
+function initSkipCheckbox() {
+  const el = $("skip-episode-posters");
+  if (!el) {
+    return;
+  }
+  el.checked = localStorage.getItem(skipEpisodePostersKey) === "true";
+  el.addEventListener("change", () => {
+    localStorage.setItem(skipEpisodePostersKey, el.checked ? "true" : "false");
+  });
+}
 
 async function pollHealth() {
   const el = $("status");
@@ -88,13 +123,11 @@ function heatClass(score) {
 }
 
 function candCard(c, job) {
-  const interactive = job.status === "manual" || job.status === "multiple";
-  const wrap = document.createElement(interactive ? "button" : "div");
+  const wrap = document.createElement("div");
   wrap.className = "cand " + heatClass(c.score);
-  if (interactive) {
-    wrap.type = "button";
-    wrap.classList.add("pick");
-    wrap.addEventListener("click", () => selectCandidate(job.id, c));
+  const key = (c.provider || "") + ":" + (c.id || "");
+  if (job.catalog_for && job.catalog_for === key) {
+    wrap.classList.add("catalog-on");
   }
   if (c.poster) {
     const img = document.createElement("img");
@@ -105,9 +138,14 @@ function candCard(c, job) {
   }
   const body = document.createElement("div");
   body.className = "cand-body";
+  const interactive = job.status === "manual" || job.status === "multiple";
+  if (interactive) {
+    body.classList.add("pick");
+    body.addEventListener("click", () => selectCandidate(job.id, c));
+  }
   const id = document.createElement("div");
   id.className = "cand-id";
-  id.textContent = (c.provider || "") + ":" + (c.id || "");
+  id.textContent = key;
   const title = document.createElement("div");
   title.className = "cand-title";
   let name = c.title || "";
@@ -124,6 +162,15 @@ function candCard(c, job) {
     body.appendChild(syn);
   }
   wrap.appendChild(body);
+  const seasons = document.createElement("button");
+  seasons.type = "button";
+  seasons.className = "seasons";
+  seasons.textContent = "seasons";
+  seasons.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    loadCatalog(job.id, c);
+  });
+  wrap.appendChild(seasons);
   return wrap;
 }
 
@@ -200,17 +247,115 @@ function renderJobs(jobs) {
       }
       card.appendChild(boxCands);
     }
+    const catalog = renderCatalog(job);
+    if (catalog) {
+      card.appendChild(catalog);
+    }
     box.appendChild(card);
   }
 }
 
 async function selectCandidate(jobId, c) {
-  await fetch("/v1/jobs/" + encodeURIComponent(jobId) + "/select", {
+  await fetch(withSkipFlag("/v1/jobs/" + encodeURIComponent(jobId) + "/select"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider: c.provider, id: c.id }),
+    body: JSON.stringify(skipPayload({ provider: c.provider, id: c.id })),
   });
   await loadJobs();
+}
+
+async function loadCatalog(jobId, c) {
+  await fetch(withSkipFlag("/v1/jobs/" + encodeURIComponent(jobId) + "/catalog"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(skipPayload({ provider: c.provider, id: c.id })),
+  });
+  await loadJobs();
+}
+
+function renderCatalog(job) {
+  if (!Array.isArray(job.catalog)) {
+    return null;
+  }
+  const box = document.createElement("div");
+  box.className = "catalog";
+  if (job.catalog.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "catalog-empty";
+    empty.textContent = "no seasons";
+    box.appendChild(empty);
+    return box;
+  }
+  for (const s of job.catalog) {
+    box.appendChild(catalogSeason(s));
+  }
+  return box;
+}
+
+function catalogSeason(s) {
+  const wrap = document.createElement("div");
+  wrap.className = "catalog-season";
+  if (s.poster) {
+    const img = document.createElement("img");
+    img.src = s.poster;
+    img.alt = "";
+    img.className = "poster";
+    wrap.appendChild(img);
+  }
+  const body = document.createElement("div");
+  body.className = "catalog-body";
+  const title = document.createElement("div");
+  title.className = "catalog-title";
+  let name = s.title || "";
+  if (s.year) name += " (" + s.year + ")";
+  title.textContent = name;
+  body.appendChild(title);
+  if (s.synopsis) {
+    const syn = document.createElement("div");
+    syn.className = "catalog-syn";
+    syn.textContent = s.synopsis;
+    body.appendChild(syn);
+  }
+  wrap.appendChild(body);
+  const eps = s.episodes || [];
+  if (eps.length) {
+    const list = document.createElement("div");
+    list.className = "catalog-eps";
+    for (const e of eps) {
+      list.appendChild(catalogEpisode(e));
+    }
+    wrap.appendChild(list);
+  }
+  return wrap;
+}
+
+function catalogEpisode(e) {
+  const wrap = document.createElement("div");
+  wrap.className = "catalog-ep";
+  if (e.poster) {
+    const img = document.createElement("img");
+    img.src = e.poster;
+    img.alt = "";
+    img.className = "poster";
+    wrap.appendChild(img);
+  }
+  const body = document.createElement("div");
+  body.className = "catalog-body";
+  const title = document.createElement("div");
+  title.className = "catalog-title";
+  let name = e.title || "";
+  if (e.number) name = e.number + ". " + name;
+  if (e.year) name += " (" + e.year + ")";
+  title.textContent = name;
+  body.appendChild(title);
+  if (e.synopsis) {
+    const syn = document.createElement("div");
+    syn.className = "catalog-syn";
+    syn.textContent = e.synopsis;
+    body.appendChild(syn);
+  }
+  wrap.appendChild(body);
+  return wrap;
 }
 
 async function loadScanStatus() {
@@ -361,7 +506,7 @@ $("upload").addEventListener("submit", async (ev) => {
   }
   const body = new FormData();
   body.append("file", file);
-  const r = await fetch("/v1/ingest", { method: "POST", body });
+  const r = await fetch(withSkipFlag("/v1/ingest"), { method: "POST", body });
   let payload = null;
   try {
     payload = await r.json();
@@ -408,7 +553,7 @@ $("retry").addEventListener("click", async () => {
   const status = $("retry-status");
   status.hidden = false;
   try {
-    const r = await fetch("/v1/retry", { method: "POST" });
+    const r = await fetch(withSkipFlag("/v1/retry"), { method: "POST" });
     let payload = null;
     try {
       payload = await r.json();
@@ -439,10 +584,10 @@ $("scan").addEventListener("click", async () => {
   status.hidden = false;
   status.textContent = "scanning…";
   watchPending();
-  const r = await fetch("/v1/scan", {
+  const r = await fetch(withSkipFlag("/v1/scan"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path }),
+    body: JSON.stringify(skipPayload({ path })),
   });
   let payload = null;
   try {
@@ -467,6 +612,7 @@ $("scan").addEventListener("click", async () => {
 
 pollHealth();
 setInterval(pollHealth, 4000);
+initSkipCheckbox();
 browse("");
 loadJobs().then(async (jobs) => {
   const st = await loadScanStatus();

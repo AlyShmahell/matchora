@@ -65,6 +65,18 @@ providers:
       query: { season: "{season}", number: "{episode}" }
       fields: { id: id, title: name, year: airdate, url: url }
       year: prefix4
+    catalog:
+      seasons:
+        url: "{base}/shows/{id}/seasons"
+        items: "$"
+        fields: { id: id, number: number, title: name, synopsis: summary, poster: image.medium, year: premiereDate }
+        year: prefix4
+      episodes:
+        url: "{base}/shows/{id}/episodes"
+        items: "$"
+        fields: { id: id, number: number, title: name, synopsis: summary, poster: image.medium, season: season, year: airdate }
+        year: prefix4
+    nfo: tvshow
   jikan:
     types: [anime]
     base: "https://api.jikan.moe/v4"
@@ -74,6 +86,8 @@ providers:
     fields: { id: mal_id, title: title, year: aired.from, url: url, synopsis: synopsis, poster: images.jpg.image_url }
     year: prefix4
     min_interval_ms: 1100
+    retries: 1
+    provider_timeout_ms: 4000
     defer: true
   omdb:
     types: [movie]
@@ -84,6 +98,12 @@ providers:
     items: Search
     fields: { id: imdbID, title: Title, year: Year, url: imdbID, poster: Poster }
     url_prefix: "https://www.imdb.com/title/"
+    nfo: movie
+    uniqueid: imdb
+    detail:
+      url: "{base}"
+      query: { apikey: "{api_key}", i: "{id}", plot: "short" }
+      fields: { synopsis: Plot }
   tmdb:
     types: [movie, anime]
     require: api_key
@@ -96,11 +116,15 @@ providers:
     year: prefix4
     url_prefix: "https://www.themoviedb.org/movie/"
     poster_prefix: "https://image.tmdb.org/t/p/w185"
+    nfo: movie
+    uniqueid: tmdb-movie
   tmdb_tv:
     types: [tv, anime]
     require: api_key
     secret: tmdb
     defer: true
+    nfo: tvshow
+    uniqueid: tmdb-tv
     base: "https://api.themoviedb.org/3"
     url: "{base}/search/tv"
     query: { api_key: "{api_key}", query: "{title}", include_adult: "false" }
@@ -109,3 +133,16 @@ providers:
     year: prefix4
     url_prefix: "https://www.themoviedb.org/tv/"
     poster_prefix: "https://image.tmdb.org/t/p/w185"
+    catalog:
+      seasons:
+        url: "{base}/tv/{id}"
+        query: { api_key: "{api_key}" }
+        items: seasons
+        fields: { id: id, number: season_number, title: name, synopsis: overview, poster: poster_path }
+        poster_prefix: "https://image.tmdb.org/t/p/w185"
+      episodes:
+        url: "{base}/tv/{id}/season/{season}"
+        query: { api_key: "{api_key}" }
+        items: episodes
+        fields: { id: id, number: episode_number, title: name, synopsis: overview, poster: still_path }
+        poster_prefix: "https://image.tmdb.org/t/p/w185"

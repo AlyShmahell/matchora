@@ -38,3 +38,4 @@ matchora/.env
 .idea/
 .vscode/
 secrets
+**/secrets

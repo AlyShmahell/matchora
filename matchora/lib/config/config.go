@@ -93,10 +93,16 @@ type Provider struct {
 	Year          string            `yaml:"year"`
 	URLPrefix     string            `yaml:"url_prefix"`
 	PosterPrefix  string            `yaml:"poster_prefix"`
-	MinIntervalMS int               `yaml:"min_interval_ms"`
-	Defer         bool              `yaml:"defer"`
-	TypeParams    map[string]string `yaml:"type_params"`
-	Episode       *Episode          `yaml:"episode"`
+	MinIntervalMS     int               `yaml:"min_interval_ms"`
+	Retries           int               `yaml:"retries"`
+	ProviderTimeoutMS int               `yaml:"provider_timeout_ms"`
+	Defer             bool              `yaml:"defer"`
+	TypeParams        map[string]string `yaml:"type_params"`
+	NFO               string            `yaml:"nfo"`
+	UniqueID          string            `yaml:"uniqueid"`
+	Episode           *Episode          `yaml:"episode"`
+	Detail            *Episode          `yaml:"detail"`
+	Catalog           *Catalog          `yaml:"catalog"`
 }
 
 type Episode struct {
@@ -104,6 +110,20 @@ type Episode struct {
 	Query  map[string]string `yaml:"query"`
 	Fields map[string]string `yaml:"fields"`
 	Year   string            `yaml:"year"`
+}
+
+type Catalog struct {
+	Seasons  *CatalogList `yaml:"seasons"`
+	Episodes *CatalogList `yaml:"episodes"`
+}
+
+type CatalogList struct {
+	URL          string            `yaml:"url"`
+	Query        map[string]string `yaml:"query"`
+	Items        string            `yaml:"items"`
+	Fields       map[string]string `yaml:"fields"`
+	Year         string            `yaml:"year"`
+	PosterPrefix string            `yaml:"poster_prefix"`
 }
 
 func ExeDir() (string, error) {

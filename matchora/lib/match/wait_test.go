@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -105,5 +106,60 @@ func TestRunWithReportsRunningProvider(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected closed wait, got %+v", log.Snapshot())
+	}
+}
+
+func TestFetchReportsPoster(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte("jpeg"))
+	}))
+	t.Cleanup(srv.Close)
+	log := &WaitLog{}
+	ctx := WithReporter(context.Background(), log)
+	ctx = WithJob(ctx, Job{ID: "a", Title: "Girls"})
+	cfg := config.Config{HTTP: config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 1000}}
+	_, _, err := Fetch(ctx, cfg, srv.URL, "tvmaze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := log.Snapshot()
+	if len(got) != 1 || got[0].Name != "tvmaze/poster" || got[0].Title != "Girls" || got[0].Until == nil {
+		t.Fatalf("waits=%+v", got)
+	}
+}
+
+func TestFillCatalogReportsWait(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/seasons") {
+			_ = json.NewEncoder(w).Encode([]any{
+				map[string]any{"id": 10, "number": 1, "name": "Season 1"},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]any{})
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{
+		HTTP:      config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 1000},
+		Providers: map[string]config.Provider{"tvmaze": tvmazeCatalogSpec(srv.URL)},
+	}
+	log := &WaitLog{}
+	cand := Candidate{Provider: "tvmaze", ID: "139", Title: "Girls"}
+	job := Job{ID: "a", Title: "Girls", Status: "matched", Match: &cand}
+	ctx := WithReporter(context.Background(), log)
+	ctx = WithJob(ctx, job)
+	out := FillCatalog(ctx, cfg, job)
+	if len(out.Catalog) != 1 {
+		t.Fatalf("catalog=%+v", out.Catalog)
+	}
+	found := false
+	for _, w := range log.Snapshot() {
+		if w.Name == "tvmaze/catalog" && w.Until != nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected catalog wait, got %+v", log.Snapshot())
 	}
 }

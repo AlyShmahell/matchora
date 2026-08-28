@@ -44,6 +44,7 @@ while [ "$i" -lt 40 ]; do
     && echo "$jobs" | grep -q '"ranker":"embed"' \
     && echo "$jobs" | grep -q '"provider":"tvmaze"' \
     && echo "$jobs" | grep -q '"provider":"jikan"' \
+    && echo "$jobs" | grep -q '"catalog_for"' \
     && ! echo "$jobs" | grep -q '"status":"pending"'; then
     break
   fi
@@ -54,6 +55,23 @@ echo "$jobs" | grep -q '"status":"matched"'
 echo "$jobs" | grep -q '"ranker":"embed"'
 echo "$jobs" | grep -q '"provider":"tvmaze"'
 echo "$jobs" | grep -q '"provider":"jikan"'
+echo "$jobs" | grep -q '"catalog_for"'
+
+catlist=""
+i=0
+while [ "$i" -lt 20 ]; do
+  catlist="$(curl -sf "$URL/v1/catalog" || true)"
+  if echo "$catlist" | grep -q '"provider":"tvmaze"' && echo "$catlist" | grep -q '"title":"Girls"'; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+echo "$catlist" | grep -q '"provider":"tvmaze"'
+echo "$catlist" | grep -q '"title":"Girls"'
+one="$(curl -sf "$URL/v1/catalog/tvmaze/139")"
+echo "$one" | grep -q '"title":"Girls"'
+echo "$one" | grep -q '"seasons"'
 
 scan="$(curl -sS -w '\n%{http_code}' -H 'Content-Type: application/json' \
   -d '{"path":"/opt/matchora/data/library"}' "$URL/v1/scan")"

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -235,4 +237,91 @@ func TestWorkerSiblingTimeoutDoesNotStarveFast(t *testing.T) {
 	if anime.Status == "pending" {
 		t.Fatalf("anime still pending: %+v", anime)
 	}
+}
+
+func TestWorkerBackfillsCatalog(t *testing.T) {
+	var searchHits, catalogHits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/search") {
+			searchHits.Add(1)
+			_ = json.NewEncoder(w).Encode([]any{})
+			return
+		}
+		catalogHits.Add(1)
+		if strings.HasSuffix(r.URL.Path, "/seasons") {
+			_ = json.NewEncoder(w).Encode([]any{
+				map[string]any{"id": 1, "number": 1, "name": "Season 1"},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]any{
+			map[string]any{"id": 1, "number": 1, "season": 1, "name": "Pilot"},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{
+		HTTP:  config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 2000},
+		Match: config.Match{MinScore: 0.72, MinMargin: 0.04, Workers: 1},
+		Providers: map[string]config.Provider{
+			"tvmaze": {
+				Types:  []string{"tv", ""},
+				Base:   srv.URL,
+				URL:    "{base}/search/shows",
+				Query:  map[string]string{"q": "{title}"},
+				Items:  "$",
+				Fields: map[string]string{"id": "show.id", "title": "show.name", "year": "show.premiered", "url": "show.url"},
+				Catalog: &config.Catalog{
+					Seasons: &config.CatalogList{
+						URL:    "{base}/shows/{id}/seasons",
+						Items:  "$",
+						Fields: map[string]string{"id": "id", "number": "number", "title": "name"},
+					},
+					Episodes: &config.CatalogList{
+						URL:    "{base}/shows/{id}/episodes",
+						Items:  "$",
+						Fields: map[string]string{"id": "id", "number": "number", "title": "name", "season": "season"},
+					},
+				},
+			},
+		},
+	}
+	store := New(t.TempDir())
+	if err := store.ReplaceAll([]match.Job{
+		{
+			ID:     "a",
+			Title:  "Girls",
+			Status: "matched",
+			Match:  &match.Candidate{Provider: "tvmaze", ID: "139", Title: "Girls"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewWorker(cfg, store).Kick()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		list, err := store.List()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(list) == 1 && list[0].Status == "matched" && list[0].Catalog != nil {
+			if searchHits.Load() != 0 {
+				t.Fatalf("search hits=%d (rematch)", searchHits.Load())
+			}
+			if catalogHits.Load() < 1 {
+				t.Fatalf("catalog hits=%d", catalogHits.Load())
+			}
+			if list[0].CatalogFor != "tvmaze:139" {
+				t.Fatalf("catalog_for=%q", list[0].CatalogFor)
+			}
+			if len(list[0].Catalog) != 1 || list[0].Catalog[0].Title != "Season 1" {
+				t.Fatalf("catalog=%+v", list[0].Catalog)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	list, _ := store.List()
+	t.Fatalf("jobs=%+v search=%d catalog=%d", list, searchHits.Load(), catalogHits.Load())
 }

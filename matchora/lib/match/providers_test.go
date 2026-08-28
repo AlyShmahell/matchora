@@ -63,6 +63,71 @@ func TestSearchProviderRetries504(t *testing.T) {
 	}
 }
 
+func TestProviderRetriesOverride(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{
+		HTTP: config.HTTP{
+			TimeoutMS:         5000,
+			Retries:           5,
+			Backoff:           config.ExpRange{MinExp: 0, MaxExp: 2},
+			ProviderTimeoutMS: 200,
+		},
+		Providers: map[string]config.Provider{
+			"src": {
+				Types:             []string{"anime"},
+				Base:              srv.URL,
+				URL:               "{base}/search",
+				Query:             map[string]string{"q": "{title}"},
+				Items:             "data",
+				Fields:            map[string]string{"id": "id", "title": "title"},
+				Retries:           1,
+				ProviderTimeoutMS: 200,
+			},
+		},
+	}
+	_, err := searchProviders(context.Background(), cfg, newHTTP(cfg), Job{Title: "X", Type: "anime"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if n.Load() != 1 {
+		t.Fatalf("attempts=%d", n.Load())
+	}
+}
+
+func TestFetchDetailMergesSynopsis(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("i") != "tt1" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"Title": "Dune", "Plot": "Sand.", "imdbID": "tt1"})
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{
+		HTTP: config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 1000},
+		Providers: map[string]config.Provider{
+			"src": {
+				Base: srv.URL,
+				Detail: &config.Episode{
+					URL:    "{base}",
+					Query:  map[string]string{"i": "{id}"},
+					Fields: map[string]string{"synopsis": "Plot"},
+				},
+			},
+		},
+	}
+	cand := Candidate{Provider: "src", ID: "tt1", Title: "Dune"}
+	fetchDetail(context.Background(), cfg, newHTTP(cfg), Job{Title: "Dune"}, &cand)
+	if cand.Synopsis != "Sand." {
+		t.Fatalf("synopsis=%q", cand.Synopsis)
+	}
+}
+
 func TestUntypedSkipsDeferredProviders(t *testing.T) {
 	var tv, jk atomic.Int32
 	tvmaze := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

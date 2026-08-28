@@ -84,6 +84,8 @@ func (s *Store) MarkPending() ([]match.Job, error) {
 		cur[i].Match = nil
 		cur[i].Candidates = nil
 		cur[i].Sub = nil
+		cur[i].Catalog = nil
+		cur[i].CatalogFor = ""
 		cur[i].Error = ""
 	}
 	if err := s.write(cur); err != nil {
@@ -109,6 +111,8 @@ func (s *Store) MarkErrorsPending() ([]match.Job, error) {
 		cur[i].Match = nil
 		cur[i].Candidates = nil
 		cur[i].Sub = nil
+		cur[i].Catalog = nil
+		cur[i].CatalogFor = ""
 		cur[i].Error = ""
 		changed = append(changed, cur[i])
 	}

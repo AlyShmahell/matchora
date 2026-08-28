@@ -35,6 +35,31 @@ func main() {
 			"airdate": "2012-04-15",
 		})
 	})
+	mux.HandleFunc("GET /shows/{id}/seasons", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, []any{
+			map[string]any{
+				"id":           1,
+				"number":       1,
+				"name":         "",
+				"summary":      "<p>Hannah and her friends.</p>",
+				"premiereDate": "2012-04-15",
+				"image":        map[string]any{"medium": "https://static.tvmaze.com/uploads/images/medium_portrait/31/78286.jpg"},
+			},
+		})
+	})
+	mux.HandleFunc("GET /shows/{id}/episodes", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, []any{
+			map[string]any{
+				"id":      1,
+				"number":  1,
+				"season":  1,
+				"name":    "Pilot",
+				"summary": "<p>Hannah returns to New York.</p>",
+				"airdate": "2012-04-15",
+				"image":   map[string]any{"medium": "https://static.tvmaze.com/uploads/images/medium_landscape/1/4388.jpg"},
+			},
+		})
+	})
 	mux.HandleFunc("GET /anime", func(w http.ResponseWriter, r *http.Request) {
 		q := strings.ToLower(r.URL.Query().Get("q"))
 		data := []any{}

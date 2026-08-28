@@ -124,7 +124,7 @@ func providerWanted(spec config.Provider, jobType string) bool {
 }
 
 func searchProvider(ctx context.Context, httpc *httpClient, name string, spec config.Provider, job Job) ([]Candidate, error) {
-	raw, err := providerGET(ctx, httpc, spec.URL, spec.Query, varsFor(spec, job, ""), func(ctx context.Context) error {
+	raw, err := providerGET(ctx, httpc.forSpec(spec), spec.URL, spec.Query, varsFor(spec, job, ""), func(ctx context.Context) error {
 		return paceProvider(ctx, name, spec.MinIntervalMS)
 	})
 	if err != nil {
@@ -149,13 +149,14 @@ func fetchEpisode(ctx context.Context, cfg config.Config, httpc *httpClient, job
 	if !ok || spec.Episode == nil || job.Season == "" || job.Episode == "" {
 		return nil
 	}
+	client := httpc.forSpec(spec)
 	done := waitStart(ctx, job, cand.Provider+"/episode")
 	if err := paceProvider(ctx, cand.Provider, spec.MinIntervalMS); err != nil {
 		done(err)
 		return nil
 	}
 	v := varsFor(spec, job, cand.ID)
-	raw, err := providerGET(ctx, httpc, spec.Episode.URL, spec.Episode.Query, v, nil)
+	raw, err := providerGET(ctx, client, spec.Episode.URL, spec.Episode.Query, v, nil)
 	if err != nil {
 		done(err)
 		return nil
@@ -177,6 +178,60 @@ func fetchEpisode(ctx context.Context, cfg config.Config, httpc *httpClient, job
 	}
 	done(nil)
 	return &c
+}
+
+func fetchDetail(ctx context.Context, cfg config.Config, httpc *httpClient, job Job, cand *Candidate) {
+	if cand == nil {
+		return
+	}
+	spec, ok := cfg.Providers[cand.Provider]
+	if !ok || spec.Detail == nil {
+		return
+	}
+	client := httpc.forSpec(spec)
+	done := waitStart(ctx, job, cand.Provider+"/detail")
+	if err := paceProvider(ctx, cand.Provider, spec.MinIntervalMS); err != nil {
+		done(err)
+		return
+	}
+	v := varsFor(spec, job, cand.ID)
+	raw, err := providerGET(ctx, client, spec.Detail.URL, spec.Detail.Query, v, nil)
+	if err != nil {
+		done(err)
+		return
+	}
+	var obj any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		done(err)
+		return
+	}
+	mergeDetail(cand, spec.Detail, obj)
+	done(nil)
+}
+
+func mergeDetail(cand *Candidate, ep *config.Episode, item any) {
+	if cand == nil || ep == nil || ep.Fields == nil {
+		return
+	}
+	if p := ep.Fields["synopsis"]; p != "" && cand.Synopsis == "" {
+		cand.Synopsis = clipText(stripHTML(asString(dig(item, p))), synopsisLimit)
+	}
+	if p := ep.Fields["title"]; p != "" && cand.Title == "" {
+		cand.Title = asString(dig(item, p))
+	}
+	if p := ep.Fields["year"]; p != "" && cand.Year == "" {
+		year := asString(dig(item, p))
+		if ep.Year == "prefix4" && len(year) >= 4 {
+			year = year[:4]
+		}
+		cand.Year = year
+	}
+	if p := ep.Fields["url"]; p != "" && cand.URL == "" {
+		cand.URL = asString(dig(item, p))
+	}
+	if p := ep.Fields["poster"]; p != "" && cand.Poster == "" {
+		cand.Poster = asString(dig(item, p))
+	}
 }
 
 func providerGET(ctx context.Context, httpc *httpClient, rawURL string, query map[string]string, vars map[string]string, pace func(context.Context) error) ([]byte, error) {
@@ -357,16 +412,21 @@ func paceProvider(ctx context.Context, name string, minMS int) error {
 	}
 	gap := time.Duration(minMS) * time.Millisecond
 	paceMu.Lock()
-	defer paceMu.Unlock()
+	wait := time.Duration(0)
 	if last, ok := paceLast[name]; ok {
-		if wait := gap - time.Since(last); wait > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(wait):
-			}
-		}
+		wait = gap - time.Since(last)
 	}
-	paceLast[name] = time.Now()
-	return nil
+	if wait <= 0 {
+		paceLast[name] = time.Now()
+		paceMu.Unlock()
+		return nil
+	}
+	paceLast[name] = time.Now().Add(wait)
+	paceMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(wait):
+		return nil
+	}
 }

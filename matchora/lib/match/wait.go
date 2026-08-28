@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const waitCap = 200
+const waitCap = 500
 
 type Reporter interface {
 	WaitStart(jobID, title, name string) string
@@ -80,12 +80,22 @@ func (l *WaitLog) Snapshot() []Wait {
 }
 
 type reporterKey struct{}
+type jobKey struct{}
 
-func withReporter(ctx context.Context, r Reporter) context.Context {
+func WithReporter(ctx context.Context, r Reporter) context.Context {
 	if r == nil {
 		return ctx
 	}
 	return context.WithValue(ctx, reporterKey{}, r)
+}
+
+func WithJob(ctx context.Context, job Job) context.Context {
+	return context.WithValue(ctx, jobKey{}, job)
+}
+
+func jobFrom(ctx context.Context) Job {
+	j, _ := ctx.Value(jobKey{}).(Job)
+	return j
 }
 
 func waitStart(ctx context.Context, job Job, name string) func(error) {

@@ -44,7 +44,7 @@ services:
     volumes:
       - ../matchora:/src:z
     working_dir: /src
-    command: ["go", "test", "-buildvcs=false", "./lib/llama", "./lib/match", "./lib/scan", "./lib/config", "./lib/jobs", "./lib/ingest"]
+    command: ["go", "test", "-buildvcs=false", "./lib/llama", "./lib/match", "./lib/scan", "./lib/config", "./lib/jobs", "./lib/ingest", "./lib/library"]
 
   tester:
     build:
