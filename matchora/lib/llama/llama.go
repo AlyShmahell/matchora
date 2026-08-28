@@ -23,14 +23,21 @@ import (
 
 var spawned *exec.Cmd
 
-func Start(cfg config.Config) error {
-	if !healthy(cfg.Llama.BaseURL) {
+func Start(cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is required")
+	}
+	probe := cfg.LlamaProbeURL()
+	llm := cfg.Llama.LLMBaseURL
+	if healthy(probe) {
+		cfg.Llama.BaseURL = probe
+	} else {
 		binDir := cfg.LlamaBinDir()
 		modelsDir := cfg.LlamaModelsDir()
 		if err := os.MkdirAll(modelsDir, 0o755); err != nil {
 			return err
 		}
-		if err := ensureBin(cfg, binDir); err != nil {
+		if err := ensureBin(*cfg, binDir); err != nil {
 			return err
 		}
 		if err := stageModel(cfg.Llama.EmbedFile, cfg.Llama.EmbedURL, modelsDir); err != nil {
@@ -41,8 +48,11 @@ func Start(cfg config.Config) error {
 				return fmt.Errorf("instruct model: %w", err)
 			}
 		}
-		ngl := nglOf(cfg)
-		if err := spawn(filepath.Join(binDir, "llama-server"), binDir, portOf(cfg.Llama.BaseURL, 8080), ngl,
+		ngl := nglOf(*cfg)
+		if cfg.Llama.Port < 1 {
+			cfg.Llama.Port = 8080
+		}
+		if err := spawn(filepath.Join(binDir, "llama-server"), binDir, cfg.Llama.Port, ngl,
 			"--metrics", "--embeddings", "--pooling", "mean", "--jinja",
 			"--ctx-size", "8192",
 			"--chat-template-kwargs", `{"enable_thinking": false}`,
@@ -50,15 +60,19 @@ func Start(cfg config.Config) error {
 		); err != nil {
 			return err
 		}
+		cfg.Llama.BaseURL = cfg.LlamaVendorURL()
 		if err := waitHealth(cfg.Llama.BaseURL, 120*time.Second); err != nil {
 			return fmt.Errorf("llama-server: %w", err)
 		}
 	}
-	if err := ensureListed(cfg, cfg.Llama.EmbedFile, cfg.Llama.EmbedURL); err != nil {
+	if config.InstructFollowsListen(llm, probe) {
+		cfg.Llama.LLMBaseURL = cfg.Llama.BaseURL
+	}
+	if err := ensureListed(*cfg, cfg.Llama.EmbedFile, cfg.Llama.EmbedURL); err != nil {
 		return fmt.Errorf("embed model: %w", err)
 	}
 	if cfg.LocalInstruct() {
-		if err := ensureListed(cfg, cfg.Llama.InstructFile, cfg.Llama.InstructURL); err != nil {
+		if err := ensureListed(*cfg, cfg.Llama.InstructFile, cfg.Llama.InstructURL); err != nil {
 			return fmt.Errorf("instruct model: %w", err)
 		}
 	}

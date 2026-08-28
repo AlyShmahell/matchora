@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/alyshmahell/matchora/lib/config"
@@ -45,7 +46,7 @@ func main() {
 	if err := os.MkdirAll(cfg.BrowseRoot, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	if err := llama.Start(cfg); err != nil {
+	if err := llama.Start(&cfg); err != nil {
 		llama.Stop()
 		log.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func main() {
 		return
 	}
 	store := jobs.New(cfg.DataDir)
-	worker := jobs.NewWorker(cfg, store)
+	worker := jobs.NewWorker(&cfg, store)
 	scans := newScanRun()
 	worker.Kick()
 
@@ -88,10 +89,56 @@ func main() {
 	mux.HandleFunc("GET /v1/match/log", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, worker.Waits())
 	})
+	mux.HandleFunc("GET /v1/secrets", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, config.SecretsStatus(cfg))
+	})
+	mux.HandleFunc("POST /v1/secrets", func(w http.ResponseWriter, r *http.Request) {
+		var updates map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&updates); err != nil || updates == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "json object of secret keys required"})
+			return
+		}
+		if err := config.SetSecrets(&cfg, updates); err != nil {
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "unknown secret key") {
+				status = http.StatusBadRequest
+			}
+			writeJSON(w, status, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, config.SecretsStatus(cfg))
+		restartSoon()
+	})
+	mux.HandleFunc("GET /v1/config", func(w http.ResponseWriter, r *http.Request) {
+		over, err := config.ReadOverlay(cfg.DataDir)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, over)
+	})
+	mux.HandleFunc("POST /v1/config", func(w http.ResponseWriter, r *http.Request) {
+		var patch map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil || patch == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "json object required"})
+			return
+		}
+		over, err := config.Overlay(&cfg, patch)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "llama.port") || strings.Contains(err.Error(), "json object") {
+				status = http.StatusBadRequest
+			}
+			writeJSON(w, status, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, over)
+		restartSoon()
+	})
 	mux.HandleFunc("POST /v1/scan", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Path                string `json:"path"`
-			SkipEpisodePosters  bool   `json:"skip_episode_posters"`
+			Path               string `json:"path"`
+			SkipEpisodePosters bool   `json:"skip_episode_posters"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path required"})
@@ -343,6 +390,27 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func restartSoon() {
+	go func() {
+		time.Sleep(time.Second)
+		llama.Stop()
+		exe, err := os.Executable()
+		if err != nil {
+			log.Fatalf("restart: %v", err)
+		}
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		log.Printf("matchora restarting")
+		if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+			log.Fatalf("restart: %v", err)
+		}
+	}()
 }
 
 func skipEpisodePosters(r *http.Request) bool {

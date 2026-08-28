@@ -335,3 +335,285 @@ providers:
 		t.Fatalf("detail=%+v", p.Detail)
 	}
 }
+
+func TestSecretKeys(t *testing.T) {
+	cfg := Config{
+		Providers: map[string]Provider{
+			"tvmaze":  {},
+			"omdb":    {Require: "api_key"},
+			"tmdb":    {Require: "api_key"},
+			"tmdb_tv": {Require: "api_key", Secret: "tmdb"},
+		},
+	}
+	got := SecretKeys(cfg)
+	want := []string{"omdb", "tmdb"}
+	if len(got) != len(want) {
+		t.Fatalf("keys=%v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("keys=%v want %v", got, want)
+		}
+	}
+}
+
+func TestSetSecretsMergeDeleteAndMode(t *testing.T) {
+	cfg := loadSecretsCfg(t, `
+providers:
+  tmdb:
+    require: api_key
+  tmdb_tv:
+    secret: tmdb
+  omdb:
+    require: api_key
+`)
+	if err := SetSecrets(&cfg, map[string]string{"tmdb": "abc123"}); err != nil {
+		t.Fatal(err)
+	}
+	st := SecretsStatus(cfg)
+	if !st["tmdb"] || st["omdb"] {
+		t.Fatalf("status=%v", st)
+	}
+	got, err := Load(cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Providers["tmdb"].APIKey != "abc123" || got.Providers["tmdb_tv"].APIKey != "abc123" {
+		t.Fatalf("tmdb after set: %+v %+v", got.Providers["tmdb"], got.Providers["tmdb_tv"])
+	}
+	if err := SetSecrets(&cfg, map[string]string{"omdb": "omdb-key"}); err != nil {
+		t.Fatal(err)
+	}
+	st = SecretsStatus(cfg)
+	if !st["tmdb"] || !st["omdb"] {
+		t.Fatalf("status after merge=%v", st)
+	}
+	got, err = Load(cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Providers["tmdb"].APIKey != "abc123" || got.Providers["omdb"].APIKey != "omdb-key" {
+		t.Fatalf("merge keys tmdb=%q omdb=%q", got.Providers["tmdb"].APIKey, got.Providers["omdb"].APIKey)
+	}
+	info, err := os.Stat(filepath.Join(cfg.DataDir, "secrets"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("perm=%o", info.Mode().Perm())
+	}
+	if err := SetSecrets(&cfg, map[string]string{"tmdb": ""}); err != nil {
+		t.Fatal(err)
+	}
+	st = SecretsStatus(cfg)
+	if st["tmdb"] || !st["omdb"] {
+		t.Fatalf("status after delete=%v", st)
+	}
+	got, err = Load(cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Providers["tmdb"].APIKey != "" || got.Providers["tmdb_tv"].APIKey != "" {
+		t.Fatalf("tmdb after delete: %q %q", got.Providers["tmdb"].APIKey, got.Providers["tmdb_tv"].APIKey)
+	}
+	if got.Providers["omdb"].APIKey != "omdb-key" {
+		t.Fatalf("omdb cleared: %q", got.Providers["omdb"].APIKey)
+	}
+}
+
+func TestSetSecretsUnknownKey(t *testing.T) {
+	cfg := loadSecretsCfg(t, "providers:\n  tmdb:\n    require: api_key\n")
+	err := SetSecrets(&cfg, map[string]string{"nope": "x"})
+	if err == nil || !strings.Contains(err.Error(), "unknown secret key") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestSetSecretsCreatesMissingFile(t *testing.T) {
+	cfg := loadSecretsCfg(t, "providers:\n  omdb:\n    require: api_key\n")
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, "secrets")); !os.IsNotExist(err) {
+		t.Fatalf("secrets should be missing: %v", err)
+	}
+	if err := SetSecrets(&cfg, map[string]string{"omdb": "k"}); err != nil {
+		t.Fatal(err)
+	}
+	st := SecretsStatus(cfg)
+	if !st["omdb"] {
+		t.Fatalf("status=%v", st)
+	}
+	got, err := Load(cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Providers["omdb"].APIKey != "k" {
+		t.Fatalf("omdb=%q", got.Providers["omdb"].APIKey)
+	}
+}
+
+func TestApplyListenFromHostPort(t *testing.T) {
+	cfg := loadSecretsCfg(t, `
+llama:
+  host: "10.0.0.2"
+  port: 9090
+  base_url: "http://127.0.0.1:8080/v1"
+  llm_base_url: "http://stub:8080/v1"
+`)
+	if cfg.Llama.Host != "10.0.0.2" || cfg.Llama.Port != 9090 {
+		t.Fatalf("listen=%s:%d", cfg.Llama.Host, cfg.Llama.Port)
+	}
+	if cfg.Llama.BaseURL != "http://10.0.0.2:9090/v1" {
+		t.Fatalf("base=%q", cfg.Llama.BaseURL)
+	}
+	if cfg.Llama.LLMBaseURL != "http://stub:8080/v1" {
+		t.Fatalf("llm=%q", cfg.Llama.LLMBaseURL)
+	}
+}
+
+func TestApplyListenParsesBaseURL(t *testing.T) {
+	cfg := loadSecretsCfg(t, `
+llama:
+  base_url: "http://192.168.1.5:1234/v1"
+`)
+	if cfg.Llama.Host != "192.168.1.5" || cfg.Llama.Port != 1234 {
+		t.Fatalf("listen=%s:%d", cfg.Llama.Host, cfg.Llama.Port)
+	}
+	if cfg.Llama.BaseURL != "http://192.168.1.5:1234/v1" {
+		t.Fatalf("base=%q", cfg.Llama.BaseURL)
+	}
+}
+
+func TestApplyListenDefaults(t *testing.T) {
+	cfg := loadSecretsCfg(t, "version: \"1\"\n")
+	if cfg.Llama.Host != "127.0.0.1" || cfg.Llama.Port != 8080 {
+		t.Fatalf("listen=%s:%d", cfg.Llama.Host, cfg.Llama.Port)
+	}
+	if cfg.Llama.BaseURL != "http://127.0.0.1:8080/v1" {
+		t.Fatalf("base=%q", cfg.Llama.BaseURL)
+	}
+}
+
+func TestOverlayMergeAndPort(t *testing.T) {
+	cfg := loadSecretsCfg(t, "match:\n  min_score: 0.5\n")
+	got, err := Overlay(&cfg, map[string]any{
+		"match": map[string]any{"min_score": 0.9},
+		"llama": map[string]any{"host": "127.0.0.1", "port": 8081},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	llama, _ := got["llama"].(map[string]any)
+	if llama["host"] != "127.0.0.1" {
+		t.Fatalf("overlay llama=%v", llama)
+	}
+	switch p := llama["port"].(type) {
+	case int:
+		if p != 8081 {
+			t.Fatalf("port=%v", p)
+		}
+	default:
+		t.Fatalf("port type %T %v", p, p)
+	}
+	match, _ := got["match"].(map[string]any)
+	if match["min_score"] != 0.9 {
+		t.Fatalf("min_score=%v", match["min_score"])
+	}
+	again, err := Overlay(&cfg, map[string]any{"match": map[string]any{"min_margin": 0.1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	match, _ = again["match"].(map[string]any)
+	if match["min_score"] != 0.9 || match["min_margin"] != 0.1 {
+		t.Fatalf("merged match=%v", match)
+	}
+	llama, _ = again["llama"].(map[string]any)
+	if llama["host"] != "127.0.0.1" {
+		t.Fatalf("llama dropped=%v", llama)
+	}
+}
+
+func TestOverlayRejectsBadPort(t *testing.T) {
+	cfg := loadSecretsCfg(t, "")
+	if _, err := Overlay(&cfg, map[string]any{"llama": map[string]any{"port": 0}}); err == nil {
+		t.Fatal("expected port error")
+	}
+	if _, err := Overlay(&cfg, map[string]any{"llama": map[string]any{"port": 70000}}); err == nil {
+		t.Fatal("expected range error")
+	}
+}
+
+func TestLoadAppliesOverlayListen(t *testing.T) {
+	cfg := loadSecretsCfg(t, `
+llama:
+  host: "127.0.0.1"
+  port: 8080
+  llm_base_url: "http://stub:8080/v1"
+`)
+	if _, err := Overlay(&cfg, map[string]any{"llama": map[string]any{"host": "10.1.2.3", "port": 9090}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Llama.Host != "10.1.2.3" || got.Llama.Port != 9090 {
+		t.Fatalf("listen=%s:%d", got.Llama.Host, got.Llama.Port)
+	}
+	if got.Llama.BaseURL != "http://10.1.2.3:9090/v1" {
+		t.Fatalf("base=%q", got.Llama.BaseURL)
+	}
+	if got.Llama.LLMBaseURL != "http://stub:8080/v1" {
+		t.Fatalf("llm=%q", got.Llama.LLMBaseURL)
+	}
+}
+
+func TestReadOverlayEmpty(t *testing.T) {
+	cfg := loadSecretsCfg(t, "")
+	got, err := ReadOverlay(cfg.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got=%v", got)
+	}
+}
+
+func TestInstructFollowsListen(t *testing.T) {
+	if !InstructFollowsListen("", "http://127.0.0.1:8080/v1") {
+		t.Fatal("empty llm should follow")
+	}
+	if !InstructFollowsListen("http://127.0.0.1:8080/v1", "http://127.0.0.1:8080/v1") {
+		t.Fatal("same origin should follow")
+	}
+	if InstructFollowsListen("http://stub:8080/v1", "http://127.0.0.1:8080/v1") {
+		t.Fatal("stub should not follow")
+	}
+}
+
+func TestLlamaProbeVendorURL(t *testing.T) {
+	cfg := Config{Llama: Llama{Host: "10.0.0.2", Port: 9090}}
+	if got := cfg.LlamaProbeURL(); got != "http://10.0.0.2:9090/v1" {
+		t.Fatalf("probe=%q", got)
+	}
+	if got := cfg.LlamaVendorURL(); got != "http://127.0.0.1:9090/v1" {
+		t.Fatalf("vendor=%q", got)
+	}
+}
+
+func loadSecretsCfg(t *testing.T, body string) Config {
+	t.Helper()
+	dir := t.TempDir()
+	data := filepath.Join(dir, "data")
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yamlPath := filepath.Join(dir, "default.yaml")
+	raw := "data_dir: " + strconv.Quote(data) + "\n" + body
+	if err := os.WriteFile(yamlPath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}

@@ -51,7 +51,7 @@ func TestWorkerRunsPendingJobsInParallel(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w := NewWorker(cfg, store)
+	w := NewWorker(&cfg, store)
 	w.Kick()
 	for i := 0; i < 2; i++ {
 		select {
@@ -136,7 +136,7 @@ func TestWorkerWritesJobBeforeBatchFinishes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	NewWorker(cfg, store).Kick()
+	NewWorker(&cfg, store).Kick()
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
@@ -209,7 +209,7 @@ func TestWorkerSiblingTimeoutDoesNotStarveFast(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	NewWorker(cfg, store).Kick()
+	NewWorker(&cfg, store).Kick()
 
 	deadline := time.Now().Add(3 * time.Second)
 	var movie, anime match.Job
@@ -297,7 +297,7 @@ func TestWorkerBackfillsCatalog(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	NewWorker(cfg, store).Kick()
+	NewWorker(&cfg, store).Kick()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

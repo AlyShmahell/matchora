@@ -28,6 +28,57 @@ echo "$html" | grep -q "model-chips"
 echo "$html" | grep -q 'id="waits"'
 echo "$html" | grep -q 'id="clear"'
 echo "$html" | grep -q "<progress"
+echo "$html" | grep -q 'id="secrets"'
+echo "$html" | grep -q 'id="secret-fields"'
+echo "$html" | grep -q 'id="llama"'
+echo "$html" | grep -q 'id="llama-host"'
+
+cfg="$(curl -sf "$URL/v1/config")"
+echo "$cfg" | grep -q '^{}'
+
+wait_healthy() {
+  i=0
+  while [ "$i" -lt 90 ]; do
+    if curl -sf "$URL/health" | grep -q '"healthy"'; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  return 1
+}
+
+# POST secrets/config re-execs; do not treat a still-up old process as ready.
+wait_after_restart() {
+  i=0
+  while [ "$i" -lt 20 ]; do
+    if ! curl -sf "$URL/health" >/dev/null; then
+      break
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  wait_healthy
+}
+
+got="$(curl -sf "$URL/v1/secrets")"
+echo "$got" | grep -q '"omdb":false'
+echo "$got" | grep -q '"tmdb":false'
+echo "$got" | grep -qv 'llama_url'
+
+# POST restarts the process; curl may drop after the 200. Wait for downtime then health.
+curl -sS -o /dev/null -H 'Content-Type: application/json' \
+  -d '{"omdb":"smoke-omdb"}' "$URL/v1/secrets" || true
+wait_after_restart
+got="$(curl -sf "$URL/v1/secrets")"
+echo "$got" | grep -q '"omdb":true'
+echo "$got" | grep -q '"tmdb":false'
+
+curl -sS -o /dev/null -H 'Content-Type: application/json' \
+  -d '{"omdb":""}' "$URL/v1/secrets" || true
+wait_after_restart
+got="$(curl -sf "$URL/v1/secrets")"
+echo "$got" | grep -q '"omdb":false'
 
 resp="$(curl -sS -w '\n%{http_code}' -F "file=@/fixtures/titles.csv;type=text/csv" "$URL/v1/ingest")"
 code="$(printf '%s\n' "$resp" | tail -n 1)"

@@ -37,6 +37,33 @@
           <ul id="dirs" class="dirs"></ul>
           <p id="scan-status" class="hint" hidden></p>
         </div>
+        <form id="secrets" class="panel">
+          <h2>secrets</h2>
+          <p class="hint">provider keys → POST /v1/secrets (restarts)</p>
+          <div id="secret-fields" class="secret-fields"></div>
+          <div class="row">
+            <button type="submit">save</button>
+          </div>
+          <p id="secrets-status" class="hint" hidden></p>
+        </form>
+        <form id="llama" class="panel">
+          <h2>llama</h2>
+          <p class="hint">host/port → POST /v1/config (restarts)</p>
+          <div class="secret-fields">
+            <label class="secret-row">
+              <span>host</span>
+              <input id="llama-host" type="text" autocomplete="off" placeholder="127.0.0.1">
+            </label>
+            <label class="secret-row">
+              <span>port</span>
+              <input id="llama-port" type="number" min="1" max="65535" placeholder="8080">
+            </label>
+          </div>
+          <div class="row">
+            <button type="submit">save</button>
+          </div>
+          <p id="llama-status" class="hint" hidden></p>
+        </form>
       </section>
     </section>
     <div class="results-grid">

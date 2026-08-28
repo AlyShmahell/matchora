@@ -11,16 +11,16 @@ import (
 )
 
 type Worker struct {
-	cfg                 config.Config
-	store               *Store
-	waits               *match.WaitLog
-	cool                *match.Circuit
-	mu                  sync.Mutex
-	busy                bool
-	skipEpisodePosters  bool
+	cfg                *config.Config
+	store              *Store
+	waits              *match.WaitLog
+	cool               *match.Circuit
+	mu                 sync.Mutex
+	busy               bool
+	skipEpisodePosters bool
 }
 
-func NewWorker(cfg config.Config, store *Store) *Worker {
+func NewWorker(cfg *config.Config, store *Store) *Worker {
 	return &Worker{cfg: cfg, store: store, waits: &match.WaitLog{}, cool: match.NewCircuit()}
 }
 
@@ -65,7 +65,7 @@ func (w *Worker) loop() {
 			return
 		}
 		for _, j := range list {
-			if j.Status == "pending" || match.NeedsCatalog(w.cfg, j) {
+			if j.Status == "pending" || match.NeedsCatalog(*w.cfg, j) {
 				w.Kick()
 				return
 			}
@@ -81,16 +81,16 @@ func (w *Worker) loop() {
 		batch := pendingBatch(list, n)
 		if len(batch) > 0 {
 			w.runBatch(batch, func(ctx context.Context, job match.Job) match.Job {
-				return match.RunWith(ctx, w.cfg, []match.Job{job}, w.waits)[0]
+				return match.RunWith(ctx, *w.cfg, []match.Job{job}, w.waits)[0]
 			})
 			continue
 		}
-		batch = catalogBatch(w.cfg, list, n)
+		batch = catalogBatch(*w.cfg, list, n)
 		if len(batch) == 0 {
 			return
 		}
 		w.runBatch(batch, func(ctx context.Context, job match.Job) match.Job {
-			return match.FillCatalog(ctx, w.cfg, job)
+			return match.FillCatalog(ctx, *w.cfg, job)
 		})
 	}
 }
@@ -111,7 +111,7 @@ func (w *Worker) runBatch(batch []match.Job, fn func(context.Context, match.Job)
 				log.Printf("match worker: update: %v", err)
 			}
 			if out.Status == "matched" && out.Match != nil {
-				if err := library.Save(ctx, w.cfg, out, *out.Match, w.skipEpisodePostersFlag()); err != nil {
+				if err := library.Save(ctx, *w.cfg, out, *out.Match, w.skipEpisodePostersFlag()); err != nil {
 					log.Printf("match worker: library: %v", err)
 				}
 			}

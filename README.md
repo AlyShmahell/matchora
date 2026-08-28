@@ -2,7 +2,7 @@
 
 Go service that scans a video library, ingests title rows, and matches them against metadata APIs using an embedder or an edge LLM via llama.cpp.
 
-The Podman builder produces a linux/amd64 tree (binary, config, admin UI). On first start, if `llama.base_url` is down, the app installs llama.cpp and the configured GGUFs into `{exeDir}/vendor/llama.cpp` and spawns one llama-server router. Ingest title rows (CSV/JSON) or scan a library path, search YAML-defined metadata APIs (TVMaze/Jikan, optional OMDb/TMDB), and rank with that server. Dirty scan names are cleaned with a local instruct model before provider search.
+The Podman builder produces a linux/amd64 tree (binary, config, admin UI). On first start, if `llama.host`:`llama.port` is down, the app installs llama.cpp and the configured GGUFs into `{exeDir}/vendor/llama.cpp` and spawns one llama-server router on localhost at that port. Ingest title rows (CSV/JSON) or scan a library path, search YAML-defined metadata APIs (TVMaze/Jikan, optional OMDb/TMDB), and rank with that server. Dirty scan names are cleaned with a local instruct model before provider search.
 
 ## Quick start
 

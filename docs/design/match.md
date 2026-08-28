@@ -8,8 +8,8 @@ Shipped defaults:
 |----------|------|--------|
 | [TVMaze](https://www.tvmaze.com/api) | none | `GET /search/shows?q=` — Episode: `/shows/{id}/episodebynumber?season=&number=` — Catalog: `/shows/{id}/seasons` plus `/shows/{id}/episodes` grouped by season |
 | [Jikan v4](https://docs.api.jikan.moe/) | none | `GET /anime?q=` — `limit: 25`, `min_interval_ms: 1100`, `retries: 1`, `provider_timeout_ms: 4000`, `defer: true` |
-| OMDb | `{data_dir}/secrets` key `omdb` | `?s=` + `type=movie` — movies only; skipped when `api_key` is empty (`require: api_key`) |
-| [TMDB](https://developer.themoviedb.org/docs/search-and-query-for-details) movie | `{data_dir}/secrets` key `tmdb` | `GET /3/search/movie` — `defer: true`; skipped when `api_key` is empty |
+| OMDb | `{data_dir}/secrets` key `omdb` (or `POST /v1/secrets`) | `?s=` + `type=movie` — movies only; skipped when `api_key` is empty (`require: api_key`) |
+| [TMDB](https://developer.themoviedb.org/docs/search-and-query-for-details) movie | `{data_dir}/secrets` key `tmdb` (or `POST /v1/secrets`) | `GET /3/search/movie` — `defer: true`; skipped when `api_key` is empty |
 | TMDB TV | `secret: tmdb` | `GET /3/search/tv` — `defer: true`; skipped when `api_key` is empty — Catalog: show `seasons`, then `/tv/{id}/season/{season}` |
 
 Type lists are an allowlist. A typed job only calls providers that list that type. Empty job type still means every provider (scan rows with no type). Defaults: `tv` / `""` → TVMaze then deferred TMDB TV; `anime` → TVMaze then deferred TMDB movie / TMDB TV / Jikan; `movie` → OMDb then deferred TMDB movie (if keyed).
@@ -34,7 +34,7 @@ Stdlib HTTP. User-Agent `matchora/{version}`.
 
 ## Ranking
 
-1. **embed** (`llama.base_url`, default `http://127.0.0.1:8080/v1`) — MiniLM, `POST /v1/embeddings`, cosine similarity. Requests send `embed` or the embed file stem as `"model"`.
+1. **embed** (`llama.base_url`, derived from `llama.host` / `llama.port`, default `http://127.0.0.1:8080/v1`) — MiniLM, `POST /v1/embeddings`, cosine similarity. Requests send `embed` or the embed file stem as `"model"`. Set host/port via YAML or `POST /v1/config` `{"llama":{"host","port"}}`.
 2. **llm** (`llama.llm_base_url`) — `POST /v1/chat/completions`. Default is the same origin as `base_url` (one local router). Point this URL elsewhere to skip the local instruct GGUF. Chat sends `instruct` or the instruct file stem as `"model"`.
 
 `ranker: embed|llm` in YAML (default embed). If the embed server is down, lexical token overlap + year bonus; record `ranker: lexical`.

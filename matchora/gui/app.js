@@ -39,6 +39,143 @@ function initSkipCheckbox() {
   });
 }
 
+async function loadSecrets() {
+  const status = $("secrets-status");
+  try {
+    const r = await fetch("/v1/secrets");
+    const j = await r.json();
+    if (!r.ok) {
+      if (status) {
+        status.hidden = false;
+        status.textContent = r.status + (j && j.error ? " " + j.error : "");
+      }
+      return;
+    }
+    renderSecrets(j);
+  } catch (err) {
+    if (status) {
+      status.hidden = false;
+      status.textContent = String(err);
+    }
+  }
+}
+
+function renderSecrets(status) {
+  const box = $("secret-fields");
+  if (!box) {
+    return;
+  }
+  box.replaceChildren();
+  const keys = Object.keys(status || {});
+  for (const key of keys) {
+    const row = document.createElement("label");
+    row.className = "secret-row";
+    const name = document.createElement("span");
+    name.textContent = key;
+    const input = document.createElement("input");
+    input.name = key;
+    input.autocomplete = "off";
+    input.type = "password";
+    input.placeholder = status[key] ? "set" : "unset";
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    hint.textContent = status[key] ? "set" : "unset";
+    row.append(name, input, hint);
+    if (status[key]) {
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.textContent = "clear";
+      clear.addEventListener("click", (e) => {
+        e.preventDefault();
+        clearSecret(key);
+      });
+      row.appendChild(clear);
+    }
+    box.appendChild(row);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitUntilHealthy(statusEl) {
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.textContent = "restarting…";
+  }
+  for (let i = 0; i < 90; i++) {
+    await sleep(1000);
+    try {
+      const r = await fetch("/health");
+      const j = await r.json();
+      if (r.ok && j.healthy === true) {
+        await pollHealth();
+        return true;
+      }
+    } catch {
+      /* bouncing */
+    }
+  }
+  if (statusEl) {
+    statusEl.textContent = "restart timed out";
+  }
+  return false;
+}
+
+async function postSecrets(body) {
+  const status = $("secrets-status");
+  status.hidden = false;
+  try {
+    const r = await fetch("/v1/secrets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    let payload = null;
+    try {
+      payload = await r.json();
+    } catch {
+      payload = null;
+    }
+    if (!r.ok) {
+      status.textContent = r.status + (payload && payload.error ? " " + payload.error : "");
+      return;
+    }
+  } catch {
+    /* connection drop on restart */
+  }
+  if (!(await waitUntilHealthy(status))) {
+    return;
+  }
+  await loadSecrets();
+  status.textContent = "saved";
+}
+
+async function loadLlama() {
+  const host = $("llama-host");
+  const port = $("llama-port");
+  if (!host || !port) {
+    return;
+  }
+  try {
+    const r = await fetch("/v1/config");
+    const j = await r.json();
+    const llama = j && j.llama ? j.llama : {};
+    host.value = llama.host || "127.0.0.1";
+    port.value = llama.port || 8080;
+  } catch {
+    host.value = host.value || "127.0.0.1";
+    port.value = port.value || 8080;
+  }
+}
+
+async function clearSecret(key) {
+  const body = {};
+  body[key] = "";
+  await postSecrets(body);
+}
+
 async function pollHealth() {
   const el = $("status");
   try {
@@ -523,6 +660,54 @@ $("upload").addEventListener("submit", async (ev) => {
   watchPending();
 });
 
+$("secrets").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const body = {};
+  for (const input of $("secret-fields").querySelectorAll("input")) {
+    const v = input.value.trim();
+    if (v) {
+      body[input.name] = v;
+    }
+  }
+  await postSecrets(body);
+});
+
+$("llama").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const status = $("llama-status");
+  status.hidden = false;
+  const host = $("llama-host").value.trim() || "127.0.0.1";
+  const port = Number($("llama-port").value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    status.textContent = "port must be 1–65535";
+    return;
+  }
+  try {
+    const r = await fetch("/v1/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ llama: { host, port } }),
+    });
+    let payload = null;
+    try {
+      payload = await r.json();
+    } catch {
+      payload = null;
+    }
+    if (!r.ok) {
+      status.textContent = r.status + (payload && payload.error ? " " + payload.error : "");
+      return;
+    }
+  } catch {
+    /* connection drop on restart */
+  }
+  if (!(await waitUntilHealthy(status))) {
+    return;
+  }
+  await loadLlama();
+  status.textContent = "saved";
+});
+
 $("clear").addEventListener("click", async () => {
   if (!confirm("Clear all jobs?")) {
     return;
@@ -613,6 +798,8 @@ $("scan").addEventListener("click", async () => {
 pollHealth();
 setInterval(pollHealth, 4000);
 initSkipCheckbox();
+loadSecrets();
+loadLlama();
 browse("");
 loadJobs().then(async (jobs) => {
   const st = await loadScanStatus();
