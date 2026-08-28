@@ -9,6 +9,12 @@ import (
 	matchfs "github.com/alyshmahell/matchora/lib/fs"
 )
 
+type File struct {
+	Path    string
+	Season  string
+	Episode string
+}
+
 const sampleVideos = 5
 
 type Item struct {
@@ -95,6 +101,36 @@ func ListVideos(root, target string) ([]string, error) {
 	return out, nil
 }
 
+func FilesUnder(root, childPath string) ([]File, error) {
+	videos, err := videosUnder(root, childPath)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]File, 0, len(videos))
+	for _, p := range videos {
+		out = append(out, File{Path: p})
+	}
+	return out, nil
+}
+
+func videosUnder(root, childPath string) ([]string, error) {
+	childPath = filepath.Clean(childPath)
+	st, err := os.Stat(childPath)
+	if err != nil {
+		return nil, err
+	}
+	if !st.IsDir() {
+		if !matchfs.Within(root, childPath) {
+			return nil, os.ErrPermission
+		}
+		if isVideo(filepath.Base(childPath)) {
+			return []string{childPath}, nil
+		}
+		return nil, nil
+	}
+	return ListVideos(root, childPath)
+}
+
 func Children(root, target string) ([]Child, error) {
 	root, target, err := resolve(root, target)
 	if err != nil {
@@ -116,7 +152,7 @@ func Children(root, target string) ([]Child, error) {
 			continue
 		}
 		if st.IsDir() {
-			listing, n := formatDir(e.Name(), p)
+			listing, n := formatDir(e.Name(), p, parent)
 			out = append(out, Child{Path: p, Listing: listing, Videos: n})
 			continue
 		}
@@ -140,11 +176,16 @@ func formatFile(name, parent string) string {
 	return b.String()
 }
 
-func formatDir(name, path string) (string, int) {
+func formatDir(name, path, parent string) (string, int) {
 	var b strings.Builder
 	b.WriteString("Folder: ")
 	b.WriteString(name)
 	b.WriteByte('\n')
+	if parent != "" && parent != name {
+		b.WriteString("Parent: ")
+		b.WriteString(parent)
+		b.WriteByte('\n')
+	}
 	ents, err := os.ReadDir(path)
 	if err != nil {
 		return b.String(), 0

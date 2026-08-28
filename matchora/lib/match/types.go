@@ -17,13 +17,15 @@ func (c Candidate) Key() string {
 }
 
 type CatalogEpisode struct {
-	ID       string `json:"id,omitempty"`
-	Number   string `json:"number,omitempty"`
-	Title    string `json:"title"`
-	Synopsis string `json:"synopsis,omitempty"`
-	Poster   string `json:"poster,omitempty"`
-	URL      string `json:"url,omitempty"`
-	Year     string `json:"year,omitempty"`
+	ID       string   `json:"id,omitempty"`
+	Number   string   `json:"number,omitempty"`
+	Title    string   `json:"title"`
+	Synopsis string   `json:"synopsis,omitempty"`
+	Poster   string   `json:"poster,omitempty"`
+	URL      string   `json:"url,omitempty"`
+	Year     string   `json:"year,omitempty"`
+	Path     string   `json:"path,omitempty"`
+	Paths    []string `json:"paths,omitempty"`
 }
 
 type CatalogSeason struct {
@@ -37,6 +39,12 @@ type CatalogSeason struct {
 	Episodes []CatalogEpisode `json:"episodes,omitempty"`
 }
 
+type JobFile struct {
+	Path    string `json:"path"`
+	Season  string `json:"season,omitempty"`
+	Episode string `json:"episode,omitempty"`
+}
+
 type Job struct {
 	ID         string          `json:"id"`
 	Source     string          `json:"source"`
@@ -47,6 +55,7 @@ type Job struct {
 	Episode    string          `json:"episode,omitempty"`
 	IMDB       string          `json:"imdb,omitempty"`
 	Path       string          `json:"path,omitempty"`
+	Files      []JobFile       `json:"files,omitempty"`
 	Status     string          `json:"status"`
 	Ranker     string          `json:"ranker,omitempty"`
 	Match      *Candidate      `json:"match,omitempty"`

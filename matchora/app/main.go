@@ -432,22 +432,27 @@ func truthyFlag(s string) bool {
 func enqueueScan(ctx context.Context, cfg config.Config, store *jobs.Store, worker *jobs.Worker, scans *scanRun, children []scan.Child) {
 	defer scans.done()
 	defer scans.prog.stop()
+	var batch []match.Job
 	for _, child := range children {
 		if ctx.Err() != nil {
 			return
 		}
-		created := jobsFromShows(match.Group(ctx, cfg, child.Listing), child.Path)
+		files, ferr := scan.FilesUnder(cfg.BrowseRoot, child.Path)
+		if ferr != nil {
+			log.Printf("scan: files %s: %v", child.Path, ferr)
+		}
+		listed := make([]match.JobFile, len(files))
+		for i, f := range files {
+			listed[i] = match.JobFile{Path: f.Path}
+		}
+		created := jobsFromShows(match.Group(ctx, cfg, child.Listing, listed), child.Path)
 		if ctx.Err() != nil {
 			return
 		}
 		if len(created) == 0 {
 			log.Printf("scan: no shows for %s", child.Path)
 		} else {
-			if _, err := store.Append(created); err != nil {
-				log.Printf("scan: append: %v", err)
-				return
-			}
-			worker.Kick()
+			batch = append(batch, created...)
 		}
 		n := child.Videos
 		if n < 1 {
@@ -455,9 +460,17 @@ func enqueueScan(ctx context.Context, cfg config.Config, store *jobs.Store, work
 		}
 		scans.prog.step(n)
 	}
+	if len(batch) == 0 {
+		return
+	}
+	if _, err := store.Append(match.MergeJobs(batch)); err != nil {
+		log.Printf("scan: append: %v", err)
+		return
+	}
+	worker.Kick()
 }
 
-func jobsFromShows(shows []match.Cleaned, path string) []match.Job {
+func jobsFromShows(shows []match.Grouped, path string) []match.Job {
 	if len(shows) == 0 {
 		return nil
 	}
@@ -471,6 +484,7 @@ func jobsFromShows(shows []match.Cleaned, path string) []match.Job {
 	created := jobs.FromRows(rows, "scan")
 	for i := range created {
 		created[i].Path = path
+		created[i].Files = shows[i].Files
 	}
 	return created
 }

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -468,6 +469,13 @@ func serverArgs(port, ngl int, extra ...string) []string {
 	return append(args, extra...)
 }
 
+func procAttr() *syscall.SysProcAttr {
+	return &syscall.SysProcAttr{
+		Setpgid:   true,
+		Pdeathsig: syscall.SIGTERM,
+	}
+}
+
 func spawn(bin, binDir string, port, ngl int, extra ...string) error {
 	args := serverArgs(port, ngl, extra...)
 	cmd := exec.Command(bin, args...)
@@ -475,7 +483,9 @@ func spawn(bin, binDir string, port, ngl int, extra ...string) error {
 	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+binDir)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = procAttr()
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	log.Printf("llama: starting :%d", port)
 	if err := cmd.Start(); err != nil {
 		return err

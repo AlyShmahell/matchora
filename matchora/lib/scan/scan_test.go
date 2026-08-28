@@ -63,6 +63,54 @@ func TestChildrenListsImmediateFilesAndFolderSubcontent(t *testing.T) {
 	}
 }
 
+func TestFilesUnderListsVideos(t *testing.T) {
+	root := t.TempDir()
+	show := filepath.Join(root, "Aldnoah Zero")
+	s1 := filepath.Join(show, "Season 1")
+	if err := os.MkdirAll(s1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ep := filepath.Join(s1, "Aldnoah Zero S01E01.mkv")
+	if err := os.WriteFile(ep, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := FilesUnder(root, show)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Path != ep {
+		t.Fatalf("got=%+v", got)
+	}
+	if got[0].Season != "" || got[0].Episode != "" {
+		t.Fatalf("labeled in scan: %#v", got[0])
+	}
+}
+
+func TestChildrenSeasonFolderHasParent(t *testing.T) {
+	root := t.TempDir()
+	show := filepath.Join(root, "Frieren")
+	s1 := filepath.Join(show, "Season 1")
+	if err := os.MkdirAll(s1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s1, "Frieren S01E01.mkv"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Children(root, show)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Path != s1 {
+		t.Fatalf("children=%+v", got)
+	}
+	if !strings.Contains(got[0].Listing, "Folder: Season 1") {
+		t.Fatalf("listing=%s", got[0].Listing)
+	}
+	if !strings.Contains(got[0].Listing, "Parent: Frieren") {
+		t.Fatalf("missing parent: %s", got[0].Listing)
+	}
+}
+
 func TestChildrenDoesNotSplitByFileCount(t *testing.T) {
 	root := t.TempDir()
 	show := filepath.Join(root, "Black Clover")

@@ -276,3 +276,28 @@ func TestFinishRankFetchesCatalog(t *testing.T) {
 		t.Fatalf("catalog hits=%d", catalogHits.Load())
 	}
 }
+
+func TestMapFilesOntoCatalog(t *testing.T) {
+	ep := "/mnt/show/Season 1/Show S01E01.mkv"
+	job := Job{
+		Files: []JobFile{
+			{Path: ep, Season: "1", Episode: "1"},
+			{Path: "/mnt/show/Season 1/bonus.mkv"},
+		},
+		Catalog: []CatalogSeason{{
+			Number: "01",
+			Title:  "Season 1",
+			Episodes: []CatalogEpisode{
+				{Number: "1", Title: "Pilot"},
+				{Number: "2", Title: "Next"},
+			},
+		}},
+	}
+	got := MapFilesOntoCatalog(job)
+	if got.Catalog[0].Episodes[0].Path != ep {
+		t.Fatalf("path=%q", got.Catalog[0].Episodes[0].Path)
+	}
+	if got.Catalog[0].Episodes[1].Path != "" {
+		t.Fatal("unmapped episode got a path")
+	}
+}

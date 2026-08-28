@@ -85,6 +85,9 @@ func Rel(root, path string) (string, error) {
 func Within(root, path string) bool {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
+	if root == string(os.PathSeparator) {
+		return path == root || filepath.IsAbs(path)
+	}
 	if path == root {
 		return true
 	}

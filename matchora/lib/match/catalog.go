@@ -36,7 +36,7 @@ func FillCatalog(ctx context.Context, cfg config.Config, job Job) Job {
 	}
 	job.Catalog = cat
 	job.CatalogFor = forKey
-	return job
+	return MapFilesOntoCatalog(job)
 }
 
 func ApplyCatalog(ctx context.Context, cfg config.Config, job Job, provider, id string) (Job, error) {
@@ -53,7 +53,7 @@ func ApplyCatalog(ctx context.Context, cfg config.Config, job Job, provider, id 
 	}
 	job.Catalog = cat
 	job.CatalogFor = forKey
-	return job, nil
+	return MapFilesOntoCatalog(job), nil
 }
 
 func NeedsCatalog(cfg config.Config, job Job) bool {
@@ -89,8 +89,49 @@ func attachCatalog(ctx context.Context, cfg config.Config, httpc *httpClient, jo
 	if cat != nil {
 		job.Catalog = cat
 		job.CatalogFor = forKey
+		return MapFilesOntoCatalog(job)
 	}
 	return job
+}
+
+// MapFilesOntoCatalog copies files[].path onto catalog episodes when season
+// and episode numbers match. Multiple files for one episode set paths.
+func MapFilesOntoCatalog(job Job) Job {
+	if len(job.Files) == 0 || len(job.Catalog) == 0 {
+		return job
+	}
+	bySE := map[string][]string{}
+	for _, f := range job.Files {
+		if strings.TrimSpace(f.Season) == "" || strings.TrimSpace(f.Episode) == "" {
+			continue
+		}
+		key := catalogNumKey(f.Season) + ":" + catalogNumKey(f.Episode)
+		bySE[key] = append(bySE[key], f.Path)
+	}
+	for i := range job.Catalog {
+		sk := catalogNumKey(job.Catalog[i].Number)
+		for j := range job.Catalog[i].Episodes {
+			key := sk + ":" + catalogNumKey(job.Catalog[i].Episodes[j].Number)
+			paths := bySE[key]
+			if len(paths) == 0 {
+				continue
+			}
+			job.Catalog[i].Episodes[j].Path = paths[0]
+			if len(paths) > 1 {
+				job.Catalog[i].Episodes[j].Paths = paths
+			}
+		}
+	}
+	return job
+}
+
+func catalogNumKey(s string) string {
+	s = strings.TrimSpace(s)
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return s
+	}
+	return strconv.Itoa(n)
 }
 
 func loadCatalog(ctx context.Context, httpc *httpClient, name string, spec config.Provider, job Job, showID string) ([]CatalogSeason, error) {

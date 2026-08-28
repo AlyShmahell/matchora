@@ -17,7 +17,7 @@ import (
 const runOverlay = "/run/matchora/config.yaml"
 
 const fallbackPrompt = `You group one library folder or file into unique titles. Return JSON only.
-Return JSON {"shows":[{"title":"","year":""}]} only.`
+Return JSON {"shows":[{"title":"","year":"","files":[{"path":"","season":"","episode":""}]}]} only.`
 
 const fallbackIngestPrompt = `You map CSV headers to title fields. Return JSON only.
 Return JSON {"columns":{"title":"","year":"","type":"","season":"","episode":"","imdb":""}} only.`
@@ -210,23 +210,21 @@ func Load(path string) (Config, error) {
 }
 
 func (c Config) Prompt() string {
-	if c.ConfigPath != "" {
-		p := filepath.Join(filepath.Dir(c.ConfigPath), "prompt.md")
-		if b, err := os.ReadFile(p); err == nil && len(strings.TrimSpace(string(b))) > 0 {
-			return string(b)
-		}
-	}
-	return fallbackPrompt
+	return c.siblingPrompt("prompt.md", fallbackPrompt)
 }
 
 func (c Config) IngestPrompt() string {
+	return c.siblingPrompt("ingest.md", fallbackIngestPrompt)
+}
+
+func (c Config) siblingPrompt(name, fallback string) string {
 	if c.ConfigPath != "" {
-		p := filepath.Join(filepath.Dir(c.ConfigPath), "ingest.md")
+		p := filepath.Join(filepath.Dir(c.ConfigPath), name)
 		if b, err := os.ReadFile(p); err == nil && len(strings.TrimSpace(string(b))) > 0 {
 			return string(b)
 		}
 	}
-	return fallbackIngestPrompt
+	return fallback
 }
 
 func (c Config) IngestSampleRows() int {

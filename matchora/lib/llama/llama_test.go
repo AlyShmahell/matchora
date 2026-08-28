@@ -1,10 +1,21 @@
 package llama
 
 import (
+	"syscall"
 	"testing"
 
 	"github.com/alyshmahell/matchora/lib/config"
 )
+
+func TestProcAttrKeepsPgidAndPdeathsig(t *testing.T) {
+	attr := procAttr()
+	if attr == nil || !attr.Setpgid {
+		t.Fatalf("Setpgid=%v", attr)
+	}
+	if attr.Pdeathsig != syscall.SIGTERM {
+		t.Fatalf("Pdeathsig=%v", attr.Pdeathsig)
+	}
+}
 
 func TestStopNoSpawn(t *testing.T) {
 	Stop()

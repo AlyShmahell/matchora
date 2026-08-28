@@ -54,7 +54,7 @@ Unknown CSV headers are mapped from `ingest.aliases` (normalized names, e.g. `me
 
 `POST /v1/scan` with `{ "path": "..." }` lists video files under a directory inside `browse_root`, returns `202 {"files": N}` immediately, then groups each immediate child with instruct chat into unique titles (`source: scan`) **before** provider search. Prompt lives in `{exeDir}/config/prompt.md`. `GET /v1/scan/status` reports `{files, done, chunks, chunk, running}` (`chunks` is the number of immediate children).
 
-Go lists immediate children of the scan path (video files and directories). For a folder it sends a compact subcontent listing (child dirs with video counts and a few sample names). If grouping returns nothing or invalid JSON, use the Folder/File name (spaced dash to colon). Skip only when that hint is missing or looks like a filename / SxxExx.
+Go lists immediate children of the scan path (video files and directories). For a folder it sends a compact subcontent listing (child dirs with video counts and a few sample names) plus the video paths under that child. One instruct call per child returns titles and optional file season/episode labels (`{"shows":[{"title","year","files":[{"path","season","episode"}]}]}`). Paths must be copied from the list. Empty S/E if the filename is not explicit `SxxExx`. Chat failure uses the Folder/File name (spaced dash to colon; Parent when Folder is Season N) and keeps the listed paths unlabeled. Same `title`+`year` across children in one scan merge into one job (Season 1/2 of one show). Those labels are copied onto catalog episodes after match. Skip a child only when the title hint is missing or looks like a filename / SxxExx.
 
 Expected trees (Plex / Jellyfin / Infuse):
 
