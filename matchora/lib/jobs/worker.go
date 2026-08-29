@@ -60,7 +60,7 @@ func (w *Worker) loop() {
 		w.mu.Lock()
 		w.busy = false
 		w.mu.Unlock()
-		list, err := w.store.List()
+		list, err := w.store.ListAll(w.cfg.SessionTTL())
 		if err != nil {
 			return
 		}
@@ -72,7 +72,7 @@ func (w *Worker) loop() {
 		}
 	}()
 	for {
-		list, err := w.store.List()
+		list, err := w.store.ListAll(w.cfg.SessionTTL())
 		if err != nil {
 			log.Printf("match worker: list: %v", err)
 			return
@@ -107,7 +107,7 @@ func (w *Worker) runBatch(batch []match.Job, fn func(context.Context, match.Job)
 			ctx = match.WithReporter(ctx, w.waits)
 			ctx = match.WithJob(ctx, job)
 			out := fn(ctx, job)
-			if err := w.store.Update(map[string]match.Job{out.ID: out}); err != nil {
+			if err := w.store.UpdateAny(w.cfg.SessionTTL(), map[string]match.Job{out.ID: out}); err != nil {
 				log.Printf("match worker: update: %v", err)
 			}
 			if out.Status == "matched" && out.Match != nil {

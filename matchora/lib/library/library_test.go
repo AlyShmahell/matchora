@@ -15,6 +15,33 @@ import (
 	"github.com/alyshmahell/matchora/lib/match"
 )
 
+func TestSameTitleUniqueID(t *testing.T) {
+	cfg := config.Config{Providers: map[string]config.Provider{
+		"src": {UniqueID: "tmdb-movie"},
+	}}
+	if !SameTitle(cfg, "src", "129", "tmdb-movie", "129") {
+		t.Fatal("yaml vs uniqueid")
+	}
+	if SameTitle(cfg, "src", "129", "src", "130") {
+		t.Fatal("id mismatch")
+	}
+}
+
+func TestRemoveUnpinnedTitle(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{DataDir: dir}
+	cand := match.Candidate{Provider: "tvmaze", ID: "139", Title: "Girls", Year: "2012"}
+	if err := Save(context.Background(), cfg, match.Job{Type: "tv"}, cand, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(cfg, "tvmaze", "139"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Get(cfg, "tvmaze", "139"); !os.IsNotExist(err) {
+		t.Fatalf("get: %v", err)
+	}
+}
+
 func TestDirNameSanitize(t *testing.T) {
 	got := DirName(config.Config{}, match.Candidate{Provider: "tvmaze", ID: "139", Title: `Girls: A/B`, Year: "2012"})
 	if !strings.HasPrefix(got, "[tvmaze-139] ") {

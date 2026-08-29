@@ -599,6 +599,22 @@ func TestLlamaProbeVendorURL(t *testing.T) {
 	}
 }
 
+func TestSessionTTLClamp(t *testing.T) {
+	if (Config{}).SessionTTL() != SessionTTLMax {
+		t.Fatalf("default=%s", Config{}.SessionTTL())
+	}
+	if (Config{Session: Session{TTLMS: -1}}).SessionTTL() != SessionTTLMax {
+		t.Fatal("negative")
+	}
+	got := (Config{Session: Session{TTLMS: 3600000}}).SessionTTL()
+	if got != time.Hour {
+		t.Fatalf("hour=%s", got)
+	}
+	if (Config{Session: Session{TTLMS: 200000000}}).SessionTTL() != SessionTTLMax {
+		t.Fatal("clamp")
+	}
+}
+
 func loadSecretsCfg(t *testing.T, body string) Config {
 	t.Helper()
 	dir := t.TempDir()

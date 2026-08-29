@@ -1,10 +1,12 @@
 const $ = (id) => document.getElementById(id);
 
 const skipEpisodePostersKey = "matchora.skip_episode_posters";
+const sessionKey = "matchora.session";
 
 let pendingTimer = null;
 let waitTick = null;
 let waitRows = [];
+let session = localStorage.getItem(sessionKey) || "";
 
 function skipEpisodePosters() {
   const el = $("skip-episode-posters");
@@ -12,12 +14,41 @@ function skipEpisodePosters() {
 }
 
 function withSkipFlag(url) {
-  if (!skipEpisodePosters()) {
-    return url;
-  }
   const u = new URL(url, location.origin);
-  u.searchParams.set("skip_episode_posters", "true");
+  if (session) {
+    u.searchParams.set("session", session);
+  }
+  if (skipEpisodePosters()) {
+    u.searchParams.set("skip_episode_posters", "true");
+  }
   return u.pathname + u.search;
+}
+
+function setSession(id) {
+  session = id || "";
+  if (session) {
+    localStorage.setItem(sessionKey, session);
+  } else {
+    localStorage.removeItem(sessionKey);
+  }
+}
+
+async function loadSession() {
+  try {
+    const r = await fetch("/v1/sessions");
+    const ids = r.ok ? await r.json() : [];
+    const list = Array.isArray(ids) ? ids : [];
+    if (session && list.includes(session)) {
+      return;
+    }
+    if (list.length) {
+      setSession(list[0]);
+    } else {
+      setSession("");
+    }
+  } catch {
+    /* keep cached session */
+  }
 }
 
 function skipPayload(extra) {
@@ -497,7 +528,10 @@ function catalogEpisode(e) {
 
 async function loadScanStatus() {
   try {
-    const r = await fetch("/v1/scan/status");
+    if (!session) {
+      return { files: 0, done: 0, running: false };
+    }
+    const r = await fetch(withSkipFlag("/v1/scan/status"));
     if (!r.ok) {
       return { files: 0, done: 0, running: false };
     }
@@ -529,7 +563,13 @@ function renderScanProgress(st) {
 }
 
 async function loadJobs() {
-  const r = await fetch("/v1/jobs");
+  if (!session) {
+    renderJobs([]);
+    waitRows = [];
+    renderWaits();
+    return [];
+  }
+  const r = await fetch(withSkipFlag("/v1/jobs"));
   const jobs = r.ok ? await r.json() : [];
   renderJobs(jobs);
   await loadWaits();
@@ -538,7 +578,12 @@ async function loadJobs() {
 
 async function loadWaits() {
   try {
-    const r = await fetch("/v1/match/log");
+    if (!session) {
+      waitRows = [];
+      renderWaits();
+      return;
+    }
+    const r = await fetch(withSkipFlag("/v1/match/log"));
     waitRows = r.ok ? await r.json() : [];
     if (!Array.isArray(waitRows)) {
       waitRows = [];
@@ -613,23 +658,38 @@ function tickWaits() {
   }
 }
 
+function stopPending() {
+  if (pendingTimer) {
+    clearInterval(pendingTimer);
+    pendingTimer = null;
+  }
+}
+
 function watchPending() {
   if (pendingTimer) {
     return;
   }
   pendingTimer = setInterval(async () => {
+    const tickSession = session;
     const jobs = await loadJobs();
     const st = await loadScanStatus();
     renderScanProgress(st);
+    if (tickSession !== session) {
+      return;
+    }
     const pending = jobs.some((j) => j.status === "pending");
     if (!pending && !st.running) {
-      clearInterval(pendingTimer);
-      pendingTimer = null;
+      stopPending();
     }
   }, 1000);
   if (!waitTick) {
     waitTick = setInterval(tickWaits, 250);
   }
+}
+
+function restartPending() {
+  stopPending();
+  watchPending();
 }
 
 $("upload").addEventListener("submit", async (ev) => {
@@ -654,10 +714,13 @@ $("upload").addEventListener("submit", async (ev) => {
     status.textContent = r.status + (payload && payload.error ? " " + payload.error : "");
     return;
   }
-  const n = Array.isArray(payload) ? payload.length : 0;
+  if (payload && payload.session) {
+    setSession(payload.session);
+  }
+  const n = payload && Array.isArray(payload.jobs) ? payload.jobs.length : 0;
   status.textContent = "queued " + n + " titles";
   await loadJobs();
-  watchPending();
+  restartPending();
 });
 
 $("secrets").addEventListener("submit", async (ev) => {
@@ -727,6 +790,8 @@ $("clear").addEventListener("click", async () => {
       return;
     }
     status.textContent = "cleared";
+    setSession("");
+    await loadSession();
     await loadJobs();
     renderScanProgress(await loadScanStatus());
   } catch (err) {
@@ -768,7 +833,6 @@ $("scan").addEventListener("click", async () => {
   const status = $("scan-status");
   status.hidden = false;
   status.textContent = "scanning…";
-  watchPending();
   const r = await fetch(withSkipFlag("/v1/scan"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -784,15 +848,18 @@ $("scan").addEventListener("click", async () => {
     status.textContent = r.status + (payload && payload.error ? " " + payload.error : "");
     return;
   }
+  if (payload && payload.session) {
+    setSession(payload.session);
+  }
   if (payload && typeof payload.files === "number") {
     status.textContent = "grouping " + payload.files + " files…";
   } else {
-    const n = Array.isArray(payload) ? payload.length : 0;
+    const n = payload && Array.isArray(payload.jobs) ? payload.jobs.length : 0;
     status.textContent = "queued " + n + " titles";
   }
   await loadJobs();
   renderScanProgress(await loadScanStatus());
-  watchPending();
+  restartPending();
 });
 
 pollHealth();
@@ -801,7 +868,7 @@ initSkipCheckbox();
 loadSecrets();
 loadLlama();
 browse("");
-loadJobs().then(async (jobs) => {
+loadSession().then(() => loadJobs()).then(async (jobs) => {
   const st = await loadScanStatus();
   renderScanProgress(st);
   if (jobs.some((j) => j.status === "pending") || st.running) {

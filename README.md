@@ -27,7 +27,7 @@ Pick **(re)build & package** to write two archives (root `matchora/`, each with 
 | `tests/` | Podman smoke + live harness |
 | `docs/` | [Architecture](docs/architecture.md), [workflow](docs/dev/workflow.md), [match](docs/design/match.md), [gui](docs/design/gui.md) |
 
-Writable runtime data (`jobs.json`, `secrets`, optional `config.yaml`) is `{exeDir}/data`, created on start.
+Writable runtime data (`jobs-{session}.json`, `secrets`, optional `config.yaml`) is `{exeDir}/data`, created on start.
 
 ## Tests
 

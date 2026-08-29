@@ -11,10 +11,14 @@ while [ "$i" -lt 40 ]; do
   sleep 1
 done
 
-curl -sf -H "Content-Type: application/json" -d '[{"title":"Girls","year":"2012","type":"tv"}]' "$URL/v1/ingest" | grep -q '"status":"pending"'
+ingested="$(curl -sf -H "Content-Type: application/json" -d '[{"title":"Girls","year":"2012","type":"tv"}]' "$URL/v1/ingest")"
+echo "$ingested" | grep -q '"status":"pending"'
+echo "$ingested" | grep -q '"session"'
+sess="$(printf '%s\n' "$ingested" | sed -n 's/.*"session":"\([^"]*\)".*/\1/p' | head -n 1)"
+[ -n "$sess" ]
 i=0
 while [ "$i" -lt 40 ]; do
-  jobs="$(curl -sf "$URL/v1/jobs")"
+  jobs="$(curl -sf "$URL/v1/jobs?session=$sess")"
   if echo "$jobs" | grep -q '"status":"matched"' && ! echo "$jobs" | grep -q '"status":"pending"'; then
     break
   fi

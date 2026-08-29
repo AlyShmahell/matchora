@@ -109,6 +109,43 @@ func TestRunWithReportsRunningProvider(t *testing.T) {
 	}
 }
 
+func TestFetchSkipsProviderPace(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte("jpeg"))
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{
+		HTTP: config.HTTP{TimeoutMS: 2000, Retries: 1, ProviderTimeoutMS: 1000},
+		Providers: map[string]config.Provider{
+			"tvmaze": {MinIntervalMS: 5000},
+		},
+	}
+	if err := paceProvider(context.Background(), "tvmaze", 5000); err != nil {
+		t.Fatal(err)
+	}
+	log := &WaitLog{}
+	ctx := WithReporter(context.Background(), log)
+	ctx = WithJob(ctx, Job{ID: "a", Title: "Girls"})
+	start := time.Now()
+	_, _, err := Fetch(ctx, cfg, srv.URL+"/static/poster.jpg", "tvmaze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) >= 2*time.Second {
+		t.Fatalf("paced image fetch: %s", time.Since(start))
+	}
+	if hits != 1 {
+		t.Fatalf("hits=%d", hits)
+	}
+	got := log.Snapshot()
+	if len(got) != 1 || got[0].Name != "tvmaze/poster" || got[0].Until == nil {
+		t.Fatalf("waits=%+v", got)
+	}
+}
+
 func TestFetchReportsPoster(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")

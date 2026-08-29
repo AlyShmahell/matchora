@@ -6,8 +6,10 @@ http:
     min_exp: 10
     max_exp: 13
   provider_timeout_ms: 10000
-version: "0.0.1"
+version: "0.0.3"
 ranker: embed
+session:
+  ttl_ms: 86400000
 match:
   min_score: 0.72
   solo_min_score: 0.01
@@ -56,6 +58,8 @@ ingest:
 providers:
   tvmaze:
     types: [tv, anime, ""]
+    min_interval_ms: 600
+    retries: 2
     base: "https://api.tvmaze.com"
     url: "{base}/search/shows"
     query: { q: "{title}" }

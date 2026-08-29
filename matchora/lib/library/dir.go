@@ -51,6 +51,33 @@ func DirName(cfg config.Config, cand match.Candidate) string {
 	return name
 }
 
+func SameTitle(cfg config.Config, providerA, idA, providerB, idB string) bool {
+	if idA == "" || idA != idB {
+		return false
+	}
+	if providerA == providerB {
+		return true
+	}
+	ia, ib := ident(cfg, providerA), ident(cfg, providerB)
+	return ia == ib || ia == providerB || ib == providerA
+}
+
+func Remove(cfg config.Config, provider, id string) error {
+	dir, err := FindDir(cfg, Root(cfg.DataDir), provider, id)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
+func RemoveAll(dataDir string) error {
+	err := os.RemoveAll(Root(dataDir))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func FindDir(cfg config.Config, root, provider, id string) (string, error) {
 	prefixes := Prefixes(cfg, provider, id)
 	ents, err := os.ReadDir(root)

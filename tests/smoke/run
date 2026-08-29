@@ -80,17 +80,25 @@ wait_after_restart
 got="$(curl -sf "$URL/v1/secrets")"
 echo "$got" | grep -q '"omdb":false'
 
+session_id() {
+  printf '%s\n' "$1" | sed -n 's/.*"session":"\([^"]*\)".*/\1/p' | head -n 1
+}
+
 resp="$(curl -sS -w '\n%{http_code}' -F "file=@/fixtures/titles.csv;type=text/csv" "$URL/v1/ingest")"
 code="$(printf '%s\n' "$resp" | tail -n 1)"
 ingested="$(printf '%s\n' "$resp" | sed '$d')"
 echo "$ingested" | grep -qv 'permission denied'
 [ "$code" = "202" ]
+echo "$ingested" | grep -q '"session"'
+echo "$ingested" | grep -q '"jobs"'
 echo "$ingested" | grep -q '"status":"pending"'
+ingsess="$(session_id "$ingested")"
+[ -n "$ingsess" ]
 
 jobs=""
 i=0
 while [ "$i" -lt 40 ]; do
-  jobs="$(curl -sf "$URL/v1/jobs")"
+  jobs="$(curl -sf "$URL/v1/jobs?session=$ingsess")"
   if echo "$jobs" | grep -q '"status":"matched"' \
     && echo "$jobs" | grep -q '"ranker":"embed"' \
     && echo "$jobs" | grep -q '"provider":"tvmaze"' \
@@ -111,7 +119,7 @@ echo "$jobs" | grep -q '"catalog_for"'
 catlist=""
 i=0
 while [ "$i" -lt 20 ]; do
-  catlist="$(curl -sf "$URL/v1/catalog" || true)"
+  catlist="$(curl -sf "$URL/v1/catalog?session=$ingsess" || true)"
   if echo "$catlist" | grep -q '"provider":"tvmaze"' && echo "$catlist" | grep -q '"title":"Girls"'; then
     break
   fi
@@ -120,7 +128,7 @@ while [ "$i" -lt 20 ]; do
 done
 echo "$catlist" | grep -q '"provider":"tvmaze"'
 echo "$catlist" | grep -q '"title":"Girls"'
-one="$(curl -sf "$URL/v1/catalog/tvmaze/139")"
+one="$(curl -sf "$URL/v1/catalog/tvmaze/139?session=$ingsess")"
 echo "$one" | grep -q '"title":"Girls"'
 echo "$one" | grep -q '"seasons"'
 
@@ -129,15 +137,19 @@ scan="$(curl -sS -w '\n%{http_code}' -H 'Content-Type: application/json' \
 scode="$(printf '%s\n' "$scan" | tail -n 1)"
 sbody="$(printf '%s\n' "$scan" | sed '$d')"
 [ "$scode" = "202" ]
+echo "$sbody" | grep -q '"session"'
 echo "$sbody" | grep -q '"files"'
 echo "$sbody" | grep -qE '"files":\s*[1-9]'
-scanst="$(curl -sf "$URL/v1/scan/status")"
+scansess="$(session_id "$sbody")"
+[ -n "$scansess" ]
+[ "$scansess" != "$ingsess" ]
+scanst="$(curl -sf "$URL/v1/scan/status?session=$scansess")"
 echo "$scanst" | grep -q '"files"'
 echo "$scanst" | grep -qE '"files":\s*[1-9]'
 
 i=0
 while [ "$i" -lt 40 ]; do
-  jobs="$(curl -sf "$URL/v1/jobs")"
+  jobs="$(curl -sf "$URL/v1/jobs?session=$scansess")"
   if echo "$jobs" | grep -q '"source":"scan"' \
     && echo "$jobs" | grep -q '"title":"Girls"' \
     && echo "$jobs" | grep -q '"title":"Cowboy Bebop"' \
@@ -156,10 +168,10 @@ echo "$jobs" | grep -q '"ranker":"embed"'
 echo "$jobs" | grep -q '"status":"matched"'
 ! echo "$jobs" | grep -q '"status":"pending"'
 
-curl -sf -X POST "$URL/v1/match" | grep -q '"status":"pending"'
+curl -sf -X POST "$URL/v1/match?session=$scansess" | grep -q '"status":"pending"'
 i=0
 while [ "$i" -lt 40 ]; do
-  jobs="$(curl -sf "$URL/v1/jobs")"
+  jobs="$(curl -sf "$URL/v1/jobs?session=$scansess")"
   if echo "$jobs" | grep -q '"status":"matched"' && ! echo "$jobs" | grep -q '"status":"pending"'; then
     break
   fi
@@ -168,15 +180,14 @@ while [ "$i" -lt 40 ]; do
 done
 echo "$jobs" | grep -q '"status":"matched"'
 
-retry="$(curl -sf -X POST "$URL/v1/retry")"
+retry="$(curl -sf -X POST "$URL/v1/retry?session=$scansess")"
 echo "$retry" | grep -q '^\['
-jobs="$(curl -sf "$URL/v1/jobs")"
+jobs="$(curl -sf "$URL/v1/jobs?session=$scansess")"
 echo "$jobs" | grep -q '"status":"matched"'
 ! echo "$jobs" | grep -q '"status":"pending"'
 
-cleared="$(curl -sf -X DELETE "$URL/v1/jobs")"
+cleared="$(curl -sf -X DELETE "$URL/v1/jobs?session=$scansess")"
 echo "$cleared" | grep -q '^\[\]'
-jobs="$(curl -sf "$URL/v1/jobs")"
-echo "$jobs" | grep -q '^\[\]'
+! curl -sf "$URL/v1/jobs?session=$scansess"
 
 echo "smoke ok"

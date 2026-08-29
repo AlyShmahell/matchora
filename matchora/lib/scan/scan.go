@@ -9,12 +9,6 @@ import (
 	matchfs "github.com/alyshmahell/matchora/lib/fs"
 )
 
-type File struct {
-	Path    string
-	Season  string
-	Episode string
-}
-
 const sampleVideos = 5
 
 type Item struct {
@@ -77,58 +71,39 @@ func ListVideos(root, target string) ([]string, error) {
 		return nil, err
 	}
 	var out []string
-	err = filepath.WalkDir(target, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	if err := collectVideos(root, target, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// collectVideos uses ReadDir + Stat so symlink directories (library folders) are followed.
+// filepath.WalkDir does not enter a symlink-to-dir start or child.
+func collectVideos(root, dir string, out *[]string) error {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		p := filepath.Join(dir, e.Name())
 		if !matchfs.Within(root, p) {
-			if d.IsDir() {
-				return filepath.SkipDir
+			continue
+		}
+		st, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if st.IsDir() {
+			if err := collectVideos(root, p, out); err != nil {
+				return err
 			}
-			return nil
+			continue
 		}
-		if d.IsDir() {
-			return nil
+		if isVideo(e.Name()) {
+			*out = append(*out, p)
 		}
-		if isVideo(d.Name()) {
-			out = append(out, p)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	return out, nil
-}
-
-func FilesUnder(root, childPath string) ([]File, error) {
-	videos, err := videosUnder(root, childPath)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]File, 0, len(videos))
-	for _, p := range videos {
-		out = append(out, File{Path: p})
-	}
-	return out, nil
-}
-
-func videosUnder(root, childPath string) ([]string, error) {
-	childPath = filepath.Clean(childPath)
-	st, err := os.Stat(childPath)
-	if err != nil {
-		return nil, err
-	}
-	if !st.IsDir() {
-		if !matchfs.Within(root, childPath) {
-			return nil, os.ErrPermission
-		}
-		if isVideo(filepath.Base(childPath)) {
-			return []string{childPath}, nil
-		}
-		return nil, nil
-	}
-	return ListVideos(root, childPath)
+	return nil
 }
 
 func Children(root, target string) ([]Child, error) {
@@ -224,22 +199,35 @@ func formatDir(name, path, parent string) (string, int) {
 func videoSample(dir string, max int) ([]string, int) {
 	var names []string
 	n := 0
-	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+	var walk func(string) error
+	walk = func(cur string) error {
+		ents, err := os.ReadDir(cur)
 		if err != nil {
-			return err
-		}
-		if d.IsDir() {
 			return nil
 		}
-		if !isVideo(d.Name()) {
-			return nil
-		}
-		n++
-		if len(names) < max {
-			names = append(names, d.Name())
+		for _, e := range ents {
+			p := filepath.Join(cur, e.Name())
+			st, err := os.Stat(p)
+			if err != nil {
+				continue
+			}
+			if st.IsDir() {
+				if err := walk(p); err != nil {
+					return err
+				}
+				continue
+			}
+			if !isVideo(e.Name()) {
+				continue
+			}
+			n++
+			if len(names) < max {
+				names = append(names, e.Name())
+			}
 		}
 		return nil
-	})
+	}
+	_ = walk(dir)
 	return names, n
 }
 

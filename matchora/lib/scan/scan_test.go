@@ -63,29 +63,6 @@ func TestChildrenListsImmediateFilesAndFolderSubcontent(t *testing.T) {
 	}
 }
 
-func TestFilesUnderListsVideos(t *testing.T) {
-	root := t.TempDir()
-	show := filepath.Join(root, "Aldnoah Zero")
-	s1 := filepath.Join(show, "Season 1")
-	if err := os.MkdirAll(s1, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ep := filepath.Join(s1, "Aldnoah Zero S01E01.mkv")
-	if err := os.WriteFile(ep, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := FilesUnder(root, show)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Path != ep {
-		t.Fatalf("got=%+v", got)
-	}
-	if got[0].Season != "" || got[0].Episode != "" {
-		t.Fatalf("labeled in scan: %#v", got[0])
-	}
-}
-
 func TestChildrenSeasonFolderHasParent(t *testing.T) {
 	root := t.TempDir()
 	show := filepath.Join(root, "Frieren")
@@ -136,5 +113,37 @@ func TestChildrenDoesNotSplitByFileCount(t *testing.T) {
 	}
 	if got[0].Videos != 90 {
 		t.Fatalf("videos=%d", got[0].Videos)
+	}
+}
+
+func TestListVideosFollowsSymlinkLibrary(t *testing.T) {
+	realRoot := t.TempDir()
+	season := filepath.Join(realRoot, "Show", "Season 1")
+	if err := os.MkdirAll(season, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(season, "Show S01E01.mkv"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	lib := filepath.Join(root, "lib")
+	if err := os.Symlink(realRoot, lib); err != nil {
+		t.Fatal(err)
+	}
+
+	videos, err := ListVideos(root, lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(videos) != 1 {
+		t.Fatalf("videos=%v", videos)
+	}
+
+	got, err := ListVideos(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("parent walk videos=%v", got)
 	}
 }

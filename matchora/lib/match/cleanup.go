@@ -13,6 +13,8 @@ import (
 	"github.com/alyshmahell/matchora/lib/config"
 )
 
+const groupMaxTokens = 256
+
 var (
 	yearSuffix     = regexp.MustCompile(`\s*\((\d{4})\)\s*$`)
 	yearOnly       = regexp.MustCompile(`^\d{4}$`)
@@ -24,6 +26,7 @@ var (
 	folderLine     = regexp.MustCompile(`(?m)^Folder:\s*(.+)$`)
 	fileLine       = regexp.MustCompile(`(?m)^File:\s*(.+)$`)
 	parentLine     = regexp.MustCompile(`(?m)^Parent:\s*(.+)$`)
+	pathLine       = regexp.MustCompile(`(?m)^Path:\s*(.+)$`)
 	childDirLine   = regexp.MustCompile(`(?m)^  - (.+?)/\s*(?:\(|$)`)
 	spacedDash     = regexp.MustCompile(`\s+[-–—]\s+`)
 )
@@ -38,7 +41,7 @@ type Cleaned struct {
 
 type Grouped struct {
 	Cleaned
-	Files []JobFile
+	Path string
 }
 
 func Cleanup(ctx context.Context, cfg config.Config, raw, parent string) Cleaned {
@@ -109,48 +112,23 @@ func Cleanup(ctx context.Context, cfg config.Config, raw, parent string) Cleaned
 	return got
 }
 
-func Group(ctx context.Context, cfg config.Config, listing string, files []JobFile) []Grouped {
+func Group(ctx context.Context, cfg config.Config, listing string) []Grouped {
 	if strings.TrimSpace(listing) == "" {
 		return nil
 	}
 	base := cfg.ChatBaseURL()
 	if base == "" {
-		return hintShows(listing, files)
+		return hintShows(listing)
 	}
 	system := strings.TrimSpace(cfg.Prompt())
 	if system == "" {
 		system = "You group video library files into unique titles. Return JSON only."
 	}
-	limit := 256
-	if len(files) > 0 {
-		limit = 2048
-	}
-	raw, err := chatJSONLimit(ctx, cfg, system, groupUser(listing, files), limit)
+	raw, err := chatJSONLimit(ctx, cfg, system, listing, groupMaxTokens)
 	if err != nil {
-		return hintShows(listing, files)
+		return hintShows(listing)
 	}
-	return parseShows(raw, listing, files)
-}
-
-func groupUser(listing string, files []JobFile) string {
-	if len(files) == 0 {
-		return listing
-	}
-	var b strings.Builder
-	b.WriteString(listing)
-	if listing != "" && !strings.HasSuffix(listing, "\n") {
-		b.WriteByte('\n')
-	}
-	b.WriteString("Files:\n")
-	for _, f := range files {
-		if f.Path == "" {
-			continue
-		}
-		b.WriteString("  - ")
-		b.WriteString(f.Path)
-		b.WriteByte('\n')
-	}
-	return b.String()
+	return parseShows(raw, listing)
 }
 
 func chatJSON(ctx context.Context, cfg config.Config, system, user string) ([]byte, error) {
@@ -210,14 +188,15 @@ func stripJSON(raw []byte) string {
 	return strings.TrimSpace(s)
 }
 
-func parseShows(raw []byte, listing string, files []JobFile) []Grouped {
+func parseShows(raw []byte, listing string) []Grouped {
 	s := stripJSON(raw)
 	var wrap struct {
 		Shows []showJSON `json:"shows"`
 	}
 	if err := json.Unmarshal([]byte(s), &wrap); err != nil {
-		return hintShows(listing, files)
+		return hintShows(listing)
 	}
+	base := listingPath(listing)
 	out := make([]Grouped, 0, len(wrap.Shows))
 	seen := map[string]int{}
 	for _, in := range wrap.Shows {
@@ -225,17 +204,17 @@ func parseShows(raw []byte, listing string, files []JobFile) []Grouped {
 		if got.Title == "" {
 			continue
 		}
+		path := resolveTitlePath(in.Path, listing, base)
 		key := strings.ToLower(got.Title) + "\t" + got.Year
-		labeled := listedFiles(in.Files, files)
 		if i, ok := seen[key]; ok {
-			out[i].Files = appendJobFiles(out[i].Files, labeled)
+			out[i].Path = mergeJobPath(out[i].Path, path)
 			continue
 		}
 		seen[key] = len(out)
-		out = append(out, Grouped{Cleaned: got, Files: labeled})
+		out = append(out, Grouped{Cleaned: got, Path: path})
 	}
 	if len(out) == 0 {
-		return hintShows(listing, files)
+		return hintShows(listing)
 	}
 	return out
 }
@@ -246,13 +225,7 @@ type showJSON struct {
 	Type    string          `json:"type"`
 	Season  string          `json:"season"`
 	Episode string          `json:"episode"`
-	Files   []fileJSON      `json:"files"`
-}
-
-type fileJSON struct {
-	Path    string `json:"path"`
-	Season  string `json:"season"`
-	Episode string `json:"episode"`
+	Path    string          `json:"path"`
 }
 
 func (s showJSON) cleaned() Cleaned {
@@ -281,7 +254,7 @@ func decodeYear(raw json.RawMessage) string {
 	return ""
 }
 
-func hintShows(listing string, files []JobFile) []Grouped {
+func hintShows(listing string) []Grouped {
 	hint := listingHint(listing)
 	if hint == "" {
 		return nil
@@ -290,88 +263,41 @@ func hintShows(listing string, files []JobFile) []Grouped {
 	if got.Title == "" {
 		return nil
 	}
-	return []Grouped{{Cleaned: got, Files: blankFiles(files)}}
+	return []Grouped{{Cleaned: got, Path: listingPath(listing)}}
 }
 
-func listedFiles(in []fileJSON, allowed []JobFile) []JobFile {
-	if len(in) == 0 || len(allowed) == 0 {
-		return nil
+func listingPath(listing string) string {
+	if m := pathLine.FindStringSubmatch(listing); len(m) == 2 {
+		return filepath.ToSlash(strings.Trim(strings.TrimSpace(m[1]), "/"))
 	}
-	byPath := map[string]string{}
-	for _, f := range allowed {
-		if f.Path == "" {
-			continue
-		}
-		byPath[f.Path] = f.Path
-		base := filepath.Base(f.Path)
-		if _, ok := byPath[base]; !ok {
-			byPath[base] = f.Path
-		}
-	}
-	var out []JobFile
-	seen := map[string]bool{}
-	for _, row := range in {
-		p := strings.TrimSpace(row.Path)
-		canon, ok := byPath[p]
-		if !ok {
-			canon, ok = byPath[filepath.Base(p)]
-		}
-		if !ok || seen[canon] {
-			continue
-		}
-		seen[canon] = true
-		out = append(out, JobFile{
-			Path:    canon,
-			Season:  strings.TrimSpace(row.Season),
-			Episode: strings.TrimSpace(row.Episode),
-		})
-	}
-	return out
+	return ""
 }
 
-func blankFiles(files []JobFile) []JobFile {
-	out := make([]JobFile, 0, len(files))
-	for _, f := range files {
-		if f.Path == "" {
-			continue
+func resolveTitlePath(raw, listing, base string) string {
+	p := filepath.ToSlash(strings.Trim(strings.TrimSpace(raw), "/"))
+	if p != "" && isSeasonName(filepath.Base(p)) {
+		p = filepath.ToSlash(filepath.Dir(p))
+		if p == "." {
+			p = ""
 		}
-		out = append(out, JobFile{Path: f.Path})
 	}
-	return out
-}
-
-func appendJobFiles(dst, extra []JobFile) []JobFile {
-	seen := map[string]bool{}
-	for _, f := range dst {
-		seen[f.Path] = true
-	}
-	for _, f := range extra {
-		if f.Path == "" || seen[f.Path] {
-			continue
+	if p != "" {
+		if base == "" || p == base || strings.HasPrefix(p, base+"/") {
+			return p
 		}
-		seen[f.Path] = true
-		dst = append(dst, f)
-	}
-	return dst
-}
-
-func MergeJobs(jobs []Job) []Job {
-	if len(jobs) < 2 {
-		return jobs
-	}
-	out := make([]Job, 0, len(jobs))
-	idx := map[string]int{}
-	for _, j := range jobs {
-		key := foldTitle(j.Title) + "\t" + strings.TrimSpace(j.Year)
-		if i, ok := idx[key]; ok {
-			out[i].Files = appendJobFiles(out[i].Files, j.Files)
-			out[i].Path = mergeJobPath(out[i].Path, j.Path)
-			continue
+		for _, d := range listingChildDirs(listing) {
+			if isSeasonName(d) || isExtrasName(d) {
+				continue
+			}
+			if foldTitle(d) == foldTitle(p) || foldTitle(filepath.Base(p)) == foldTitle(d) {
+				if base != "" {
+					return base + "/" + d
+				}
+				return d
+			}
 		}
-		idx[key] = len(out)
-		out = append(out, j)
 	}
-	return out
+	return base
 }
 
 func mergeJobPath(a, b string) string {

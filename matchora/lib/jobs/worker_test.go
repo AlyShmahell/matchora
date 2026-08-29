@@ -45,12 +45,10 @@ func TestWorkerRunsPendingJobsInParallel(t *testing.T) {
 		},
 	}
 	store := New(t.TempDir())
-	if err := store.ReplaceAll([]match.Job{
+	sess := seed(t, store, []match.Job{
 		{ID: "a", Title: "Girls", Status: "pending"},
 		{ID: "b", Title: "Girls", Status: "pending"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	w := NewWorker(&cfg, store)
 	w.Kick()
 	for i := 0; i < 2; i++ {
@@ -73,7 +71,7 @@ func TestWorkerRunsPendingJobsInParallel(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		list, err := store.List()
+		list, err := store.List(sess)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,7 +86,7 @@ func TestWorkerRunsPendingJobsInParallel(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	list, _ := store.List()
+	list, _ := store.List(sess)
 	t.Fatalf("jobs=%+v", list)
 }
 
@@ -130,12 +128,10 @@ func TestWorkerWritesJobBeforeBatchFinishes(t *testing.T) {
 		},
 	}
 	store := New(t.TempDir())
-	if err := store.ReplaceAll([]match.Job{
+	sess := seed(t, store, []match.Job{
 		{ID: "fast", Title: "Girls", Status: "pending"},
 		{ID: "slow", Title: "Slow", Status: "pending"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	NewWorker(&cfg, store).Kick()
 	select {
 	case <-started:
@@ -144,7 +140,7 @@ func TestWorkerWritesJobBeforeBatchFinishes(t *testing.T) {
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		list, err := store.List()
+		list, err := store.List(sess)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,7 +160,7 @@ func TestWorkerWritesJobBeforeBatchFinishes(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	unlock()
-	list, _ := store.List()
+	list, _ := store.List(sess)
 	t.Fatalf("expected fast matched while slow pending, jobs=%+v", list)
 }
 
@@ -203,18 +199,16 @@ func TestWorkerSiblingTimeoutDoesNotStarveFast(t *testing.T) {
 		},
 	}
 	store := New(t.TempDir())
-	if err := store.ReplaceAll([]match.Job{
+	sess := seed(t, store, []match.Job{
 		{ID: "movie", Title: "Dune", Type: "movie", Status: "pending"},
 		{ID: "anime", Title: "Slow", Type: "anime", Status: "pending"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	NewWorker(&cfg, store).Kick()
 
 	deadline := time.Now().Add(3 * time.Second)
 	var movie, anime match.Job
 	for time.Now().Before(deadline) {
-		list, err := store.List()
+		list, err := store.List(sess)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -287,21 +281,19 @@ func TestWorkerBackfillsCatalog(t *testing.T) {
 		},
 	}
 	store := New(t.TempDir())
-	if err := store.ReplaceAll([]match.Job{
+	sess := seed(t, store, []match.Job{
 		{
 			ID:     "a",
 			Title:  "Girls",
 			Status: "matched",
 			Match:  &match.Candidate{Provider: "tvmaze", ID: "139", Title: "Girls"},
 		},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	NewWorker(&cfg, store).Kick()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		list, err := store.List()
+		list, err := store.List(sess)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -322,6 +314,6 @@ func TestWorkerBackfillsCatalog(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	list, _ := store.List()
+	list, _ := store.List(sess)
 	t.Fatalf("jobs=%+v search=%d catalog=%d", list, searchHits.Load(), catalogHits.Load())
 }

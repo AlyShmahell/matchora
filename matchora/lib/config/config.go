@@ -17,7 +17,7 @@ import (
 const runOverlay = "/run/matchora/config.yaml"
 
 const fallbackPrompt = `You group one library folder or file into unique titles. Return JSON only.
-Return JSON {"shows":[{"title":"","year":"","files":[{"path":"","season":"","episode":""}]}]} only.`
+Return JSON {"shows":[{"title":"","year":"","path":""}]} only.`
 
 const fallbackIngestPrompt = `You map CSV headers to title fields. Return JSON only.
 Return JSON {"columns":{"title":"","year":"","type":"","season":"","episode":"","imdb":""}} only.`
@@ -29,6 +29,7 @@ type Config struct {
 	Version    string              `yaml:"version"`
 	Ranker     string              `yaml:"ranker"`
 	Match      Match               `yaml:"match"`
+	Session    Session             `yaml:"session"`
 	Llama      Llama               `yaml:"llama"`
 	Ingest     Ingest              `yaml:"ingest"`
 	Providers  map[string]Provider `yaml:"providers"`
@@ -48,6 +49,23 @@ type HTTP struct {
 	Retries           int      `yaml:"retries"`
 	Backoff           ExpRange `yaml:"backoff"`
 	ProviderTimeoutMS int      `yaml:"provider_timeout_ms"`
+}
+
+const SessionTTLMax = 24 * time.Hour
+
+type Session struct {
+	TTLMS int `yaml:"ttl_ms"`
+}
+
+func (c Config) SessionTTL() time.Duration {
+	if c.Session.TTLMS <= 0 {
+		return SessionTTLMax
+	}
+	d := time.Duration(c.Session.TTLMS) * time.Millisecond
+	if d > SessionTTLMax {
+		return SessionTTLMax
+	}
+	return d
 }
 
 type Match struct {

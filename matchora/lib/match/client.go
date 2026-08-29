@@ -181,25 +181,20 @@ func Fetch(ctx context.Context, cfg config.Config, rawURL, provider string) ([]b
 		return nil, "", fmt.Errorf("empty url")
 	}
 	c := newHTTP(cfg)
-	minMS := 0
 	if spec, ok := cfg.Providers[provider]; ok {
-		minMS = spec.MinIntervalMS
 		c = c.forSpec(spec)
 	}
-	pace := func(ctx context.Context) error {
-		return paceProvider(ctx, provider, minMS)
-	}
+	var retErr error
 	done := waitStart(ctx, jobFrom(ctx), provider+"/poster")
-	b, ctype, code, err := c.getBytes(ctx, rawURL, pace)
+	defer func() { done(retErr) }()
+	b, ctype, code, err := c.getBytes(ctx, rawURL, nil)
 	if err != nil {
-		done(err)
+		retErr = err
 		return nil, "", err
 	}
 	if code >= 400 {
-		err = fmt.Errorf("status %d", code)
-		done(err)
-		return nil, "", err
+		retErr = fmt.Errorf("status %d", code)
+		return nil, "", retErr
 	}
-	done(nil)
 	return b, ctype, nil
 }

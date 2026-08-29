@@ -75,19 +75,50 @@ func main() {
 		}
 		writeJSON(w, http.StatusOK, listing)
 	})
-	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
-		list, err := store.List()
+	mux.HandleFunc("GET /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
+		for _, gone := range store.PurgeExpired(cfg.SessionTTL()) {
+			scans.abortIf(gone)
+		}
+		ids, err := store.Sessions(cfg.SessionTTL())
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if ids == nil {
+			ids = []string{}
+		}
+		writeJSON(w, http.StatusOK, ids)
+	})
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		list, err := store.List(sess)
+		if err != nil {
+			writeJSON(w, storeStatus(err), map[string]string{"error": storeError(err)})
 			return
 		}
 		writeJSON(w, http.StatusOK, list)
 	})
 	mux.HandleFunc("GET /v1/scan/status", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, scans.prog.snapshot())
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		writeJSON(w, http.StatusOK, scans.snapshot(sess))
 	})
 	mux.HandleFunc("GET /v1/match/log", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, worker.Waits())
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		list, err := store.List(sess)
+		if err != nil {
+			writeJSON(w, storeStatus(err), map[string]string{"error": storeError(err)})
+			return
+		}
+		writeJSON(w, http.StatusOK, filterWaits(worker.Waits(), list))
 	})
 	mux.HandleFunc("GET /v1/secrets", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, config.SecretsStatus(cfg))
@@ -146,15 +177,6 @@ func main() {
 		}
 		skip := skipEpisodePosters(r) || body.SkipEpisodePosters
 		worker.SetSkipEpisodePosters(skip)
-		videos, err := scan.ListVideos(cfg.BrowseRoot, body.Path)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		if len(videos) == 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no titles in path"})
-			return
-		}
 		target := body.Path
 		if target == "" {
 			target = cfg.BrowseRoot
@@ -165,13 +187,22 @@ func main() {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		if len(children) == 0 {
+		files := 0
+		for _, c := range children {
+			files += c.Videos
+		}
+		if len(children) == 0 || files == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no titles in path"})
 			return
 		}
-		ctx := scans.start(len(videos), len(children))
-		writeJSON(w, http.StatusAccepted, map[string]any{"files": len(videos)})
-		go enqueueScan(ctx, cfg, store, worker, scans, children)
+		sess := jobs.NewSessionID(time.Now())
+		if err := store.Create(sess); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		ctx := scans.start(sess, files, len(children))
+		writeJSON(w, http.StatusAccepted, map[string]any{"session": sess, "files": files})
+		go enqueueScan(ctx, cfg, store, worker, scans, sess, children)
 	})
 	mux.HandleFunc("POST /v1/ingest", func(w http.ResponseWriter, r *http.Request) {
 		name, ct, body, err := ingestBody(r)
@@ -186,18 +217,27 @@ func main() {
 			return
 		}
 		created := jobs.FromRows(rows, "ingest")
-		if _, err := store.Append(created); err != nil {
+		sess := jobs.NewSessionID(time.Now())
+		if err := store.Create(sess); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if _, err := store.Append(sess, created); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		worker.SetSkipEpisodePosters(skipEpisodePosters(r))
 		worker.Kick()
-		writeJSON(w, http.StatusAccepted, created)
+		writeJSON(w, http.StatusAccepted, map[string]any{"session": sess, "jobs": created})
 	})
 	mux.HandleFunc("POST /v1/match", func(w http.ResponseWriter, r *http.Request) {
-		list, err := store.MarkPending()
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		list, err := store.MarkPending(sess)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeJSON(w, storeStatus(err), map[string]string{"error": storeError(err)})
 			return
 		}
 		worker.SetSkipEpisodePosters(skipEpisodePosters(r))
@@ -205,17 +245,25 @@ func main() {
 		writeJSON(w, http.StatusAccepted, list)
 	})
 	mux.HandleFunc("DELETE /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
-		scans.abort()
-		if err := store.Clear(); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		scans.abortIf(sess)
+		if err := store.Clear(sess); err != nil {
+			writeJSON(w, storeStatus(err), map[string]string{"error": storeError(err)})
 			return
 		}
 		writeJSON(w, http.StatusOK, []match.Job{})
 	})
 	mux.HandleFunc("POST /v1/retry", func(w http.ResponseWriter, r *http.Request) {
-		list, err := store.MarkErrorsPending()
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		list, err := store.MarkErrorsPending(sess)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeJSON(w, storeStatus(err), map[string]string{"error": storeError(err)})
 			return
 		}
 		worker.SetSkipEpisodePosters(skipEpisodePosters(r))
@@ -234,7 +282,11 @@ func main() {
 		}
 		skip := skipEpisodePosters(r) || body.SkipEpisodePosters
 		worker.SetSkipEpisodePosters(skip)
-		job, err := store.Get(r.PathValue("id"))
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		job, err := store.Get(sess, r.PathValue("id"))
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
@@ -248,7 +300,7 @@ func main() {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		if err := store.Update(map[string]match.Job{done.ID: done}); err != nil {
+		if err := store.Update(sess, map[string]match.Job{done.ID: done}); err != nil {
 			cancel()
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -273,7 +325,11 @@ func main() {
 		}
 		skip := skipEpisodePosters(r) || body.SkipEpisodePosters
 		worker.SetSkipEpisodePosters(skip)
-		job, err := store.Get(r.PathValue("id"))
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		job, err := store.Get(sess, r.PathValue("id"))
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
@@ -287,7 +343,7 @@ func main() {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		if err := store.Update(map[string]match.Job{done.ID: done}); err != nil {
+		if err := store.Update(sess, map[string]match.Job{done.ID: done}); err != nil {
 			cancel()
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -301,15 +357,55 @@ func main() {
 		writeJSON(w, http.StatusOK, done)
 	})
 	mux.HandleFunc("GET /v1/catalog", func(w http.ResponseWriter, r *http.Request) {
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		jobsList, err := store.List(sess)
+		if err != nil {
+			writeJSON(w, storeStatus(err), map[string]string{"error": storeError(err)})
+			return
+		}
 		list, err := library.List(cfg.DataDir)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, list)
+		writeJSON(w, http.StatusOK, filterCatalog(cfg, list, jobsList))
+	})
+	mux.HandleFunc("DELETE /v1/catalog", func(w http.ResponseWriter, r *http.Request) {
+		store.PurgeExpired(cfg.SessionTTL())
+		pins, err := store.PinningAny(cfg.SessionTTL())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if len(pins) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "pinned by " + strings.Join(pins, ", ")})
+			return
+		}
+		if err := library.RemoveAll(cfg.DataDir); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, []library.Title{})
 	})
 	mux.HandleFunc("GET /v1/catalog/{provider}/{id}", func(w http.ResponseWriter, r *http.Request) {
-		got, err := library.Get(cfg, r.PathValue("provider"), r.PathValue("id"))
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		provider, id := r.PathValue("provider"), r.PathValue("id")
+		jobsList, err := store.List(sess)
+		if err != nil {
+			writeJSON(w, storeStatus(err), map[string]string{"error": storeError(err)})
+			return
+		}
+		if !sessionHasTitle(cfg, jobsList, provider, id) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		got, err := library.Get(cfg, provider, id)
 		if err != nil {
 			if os.IsNotExist(err) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
@@ -320,7 +416,38 @@ func main() {
 		}
 		writeJSON(w, http.StatusOK, got)
 	})
+	mux.HandleFunc("DELETE /v1/catalog/{provider}/{id}", func(w http.ResponseWriter, r *http.Request) {
+		store.PurgeExpired(cfg.SessionTTL())
+		provider, id := r.PathValue("provider"), r.PathValue("id")
+		pins, err := store.Pinning(cfg.SessionTTL(), cfg, provider, id)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if len(pins) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "pinned by " + strings.Join(pins, ", ")})
+			return
+		}
+		if err := library.Remove(cfg, provider, id); err != nil {
+			if os.IsNotExist(err) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"provider": provider, "id": id})
+	})
 	mux.HandleFunc("GET /v1/catalog/{provider}/{id}/{path...}", func(w http.ResponseWriter, r *http.Request) {
+		sess, ok := requireSession(w, r, store, cfg, scans)
+		if !ok {
+			return
+		}
+		jobsList, err := store.List(sess)
+		if err != nil || !sessionHasTitle(cfg, jobsList, r.PathValue("provider"), r.PathValue("id")) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
 		season, episode, ok := parseCatalogFile(r.PathValue("path"))
 		if !ok {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
@@ -429,48 +556,134 @@ func truthyFlag(s string) bool {
 	}
 }
 
-func enqueueScan(ctx context.Context, cfg config.Config, store *jobs.Store, worker *jobs.Worker, scans *scanRun, children []scan.Child) {
+func requireSession(w http.ResponseWriter, r *http.Request, store *jobs.Store, cfg config.Config, scans *scanRun) (string, bool) {
+	id := strings.TrimSpace(r.URL.Query().Get("session"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session required"})
+		return "", false
+	}
+	if !jobs.ValidSessionID(id) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session"})
+		return "", false
+	}
+	for _, gone := range store.PurgeExpired(cfg.SessionTTL()) {
+		scans.abortIf(gone)
+	}
+	if jobs.SessionExpired(id, time.Now(), cfg.SessionTTL()) || !store.Has(id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return "", false
+	}
+	return id, true
+}
+
+func storeStatus(err error) int {
+	if err == jobs.ErrInvalidSession {
+		return http.StatusBadRequest
+	}
+	if os.IsNotExist(err) {
+		return http.StatusNotFound
+	}
+	return http.StatusInternalServerError
+}
+
+func storeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if err == jobs.ErrInvalidSession {
+		return "invalid session"
+	}
+	if os.IsNotExist(err) {
+		return "not found"
+	}
+	return err.Error()
+}
+
+func filterCatalog(cfg config.Config, titles []library.Title, list []match.Job) []library.Title {
+	out := make([]library.Title, 0)
+	for _, t := range titles {
+		if sessionHasTitle(cfg, list, t.Provider, t.ID) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func sessionHasTitle(cfg config.Config, list []match.Job, provider, id string) bool {
+	for _, j := range list {
+		if j.Match != nil && library.SameTitle(cfg, j.Match.Provider, j.Match.ID, provider, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterWaits(all []match.Wait, list []match.Job) []match.Wait {
+	ids := map[string]bool{}
+	for _, j := range list {
+		ids[j.ID] = true
+	}
+	out := make([]match.Wait, 0)
+	for _, w := range all {
+		if ids[w.JobID] {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func enqueueScan(ctx context.Context, cfg config.Config, store *jobs.Store, worker *jobs.Worker, scans *scanRun, session string, children []scan.Child) {
 	defer scans.done()
-	defer scans.prog.stop()
-	var batch []match.Job
+	defer func() {
+		if ctx.Err() != nil {
+			scans.halt(session)
+			return
+		}
+		scans.stop(session)
+	}()
 	for _, child := range children {
 		if ctx.Err() != nil {
 			return
 		}
-		files, ferr := scan.FilesUnder(cfg.BrowseRoot, child.Path)
-		if ferr != nil {
-			log.Printf("scan: files %s: %v", child.Path, ferr)
-		}
-		listed := make([]match.JobFile, len(files))
-		for i, f := range files {
-			listed[i] = match.JobFile{Path: f.Path}
-		}
-		created := jobsFromShows(match.Group(ctx, cfg, child.Listing, listed), child.Path)
+		created := jobsFromShows(match.Group(ctx, cfg, childListing(cfg.BrowseRoot, child)), cfg.BrowseRoot, child)
 		if ctx.Err() != nil {
 			return
 		}
 		if len(created) == 0 {
 			log.Printf("scan: no shows for %s", child.Path)
 		} else {
-			batch = append(batch, created...)
+			if _, err := store.Append(session, created); err != nil {
+				log.Printf("scan: append: %v", err)
+				return
+			}
+			worker.Kick()
 		}
 		n := child.Videos
 		if n < 1 {
 			n = 1
 		}
-		scans.prog.step(n)
+		scans.step(session, n)
 	}
-	if len(batch) == 0 {
-		return
-	}
-	if _, err := store.Append(match.MergeJobs(batch)); err != nil {
-		log.Printf("scan: append: %v", err)
-		return
-	}
-	worker.Kick()
 }
 
-func jobsFromShows(shows []match.Grouped, path string) []match.Job {
+func childListing(root string, child scan.Child) string {
+	rel, err := filepath.Rel(root, child.Path)
+	if err != nil {
+		rel = filepath.Base(child.Path)
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." || rel == "" {
+		rel = filepath.Base(child.Path)
+	}
+	var b strings.Builder
+	b.WriteString("Path: ")
+	b.WriteString(rel)
+	b.WriteByte('\n')
+	b.WriteString(child.Listing)
+	return b.String()
+}
+
+func jobsFromShows(shows []match.Grouped, root string, child scan.Child) []match.Job {
 	if len(shows) == 0 {
 		return nil
 	}
@@ -483,44 +696,121 @@ func jobsFromShows(shows []match.Grouped, path string) []match.Job {
 	}
 	created := jobs.FromRows(rows, "scan")
 	for i := range created {
-		created[i].Path = path
-		created[i].Files = shows[i].Files
+		created[i].Path = resolveShowPath(root, child.Path, shows[i].Path)
 	}
 	return created
 }
 
+func resolveShowPath(root, childAbs, rel string) string {
+	if rel == "" {
+		return childAbs
+	}
+	if filepath.IsAbs(rel) {
+		if matchfs.Within(root, rel) {
+			return filepath.Clean(rel)
+		}
+		return childAbs
+	}
+	abs := filepath.Clean(filepath.Join(root, filepath.FromSlash(rel)))
+	if !matchfs.Within(root, abs) {
+		return childAbs
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return childAbs
+	}
+	return abs
+}
+
 type scanRun struct {
-	prog   *scanProg
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	session string
+	wg      sync.WaitGroup
+	progs   map[string]*scanProg
 }
 
 func newScanRun() *scanRun {
-	return &scanRun{prog: newScanProg()}
+	return &scanRun{progs: map[string]*scanProg{}}
+}
+
+func (s *scanRun) abortIf(session string) {
+	s.mu.Lock()
+	active := s.session == session
+	s.mu.Unlock()
+	if active {
+		s.abort()
+	}
 }
 
 func (s *scanRun) abort() {
 	s.mu.Lock()
 	cancel := s.cancel
 	s.cancel = nil
+	sess := s.session
+	p := s.progs[sess]
+	s.session = ""
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 	s.wg.Wait()
-	s.prog.reset()
+	if p != nil {
+		p.halt()
+	}
 }
 
-func (s *scanRun) start(files, chunks int) context.Context {
+func (s *scanRun) start(session string, files, chunks int) context.Context {
 	s.abort()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	s.mu.Lock()
 	s.cancel = cancel
+	s.session = session
+	if s.progs == nil {
+		s.progs = map[string]*scanProg{}
+	}
+	p := newScanProg()
+	p.start(files, chunks)
+	s.progs[session] = p
 	s.wg.Add(1)
 	s.mu.Unlock()
-	s.prog.start(files, chunks)
 	return ctx
+}
+
+func (s *scanRun) snapshot(session string) map[string]any {
+	s.mu.Lock()
+	p := s.progs[session]
+	s.mu.Unlock()
+	if p == nil {
+		return map[string]any{"files": 0, "done": 0, "chunks": 0, "chunk": 0, "running": false}
+	}
+	return p.snapshot()
+}
+
+func (s *scanRun) step(session string, n int) {
+	s.mu.Lock()
+	p := s.progs[session]
+	s.mu.Unlock()
+	if p != nil {
+		p.step(n)
+	}
+}
+
+func (s *scanRun) halt(session string) {
+	s.mu.Lock()
+	p := s.progs[session]
+	s.mu.Unlock()
+	if p != nil {
+		p.halt()
+	}
+}
+
+func (s *scanRun) stop(session string) {
+	s.mu.Lock()
+	p := s.progs[session]
+	s.mu.Unlock()
+	if p != nil {
+		p.stop()
+	}
 }
 
 func (s *scanRun) done() {
@@ -578,12 +868,8 @@ func (p *scanProg) stop() {
 	p.chunk = p.chunks
 }
 
-func (p *scanProg) reset() {
+func (p *scanProg) halt() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.files = 0
-	p.done = 0
-	p.chunks = 0
-	p.chunk = 0
 	p.running = false
 }
