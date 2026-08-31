@@ -3,11 +3,9 @@ package config
 import (
 	"fmt"
 	"math/rand/v2"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,25 +14,26 @@ import (
 
 const runOverlay = "/run/matchora/config.yaml"
 
-const fallbackPrompt = `You group one library folder or file into unique titles. Return JSON only.
-Return JSON {"shows":[{"title":"","year":"","path":""}]} only.`
-
-const fallbackIngestPrompt = `You map CSV headers to title fields. Return JSON only.
-Return JSON {"columns":{"title":"","year":"","type":"","season":"","episode":"","imdb":""}} only.`
-
 type Config struct {
 	HTTP       HTTP                `yaml:"http"`
 	DataDir    string              `yaml:"data_dir"`
 	BrowseRoot string              `yaml:"browse_root"`
 	Version    string              `yaml:"version"`
-	Ranker     string              `yaml:"ranker"`
 	Match      Match               `yaml:"match"`
 	Session    Session             `yaml:"session"`
-	Llama      Llama               `yaml:"llama"`
+	Group      Group               `yaml:"group"`
 	Ingest     Ingest              `yaml:"ingest"`
 	Providers  map[string]Provider `yaml:"providers"`
 	ConfigPath string              `yaml:"-"`
 	ExeDir     string              `yaml:"-"`
+}
+
+type Group struct {
+	SeqThreshold float64  `yaml:"seq_threshold"`
+	VideoExt     []string `yaml:"video_ext"`
+	Extras       []string `yaml:"extras"`
+	Release      []string `yaml:"release"`
+	Kinds        []string `yaml:"kinds"`
 }
 
 type Ingest struct {
@@ -82,24 +81,6 @@ type Match struct {
 type ExpRange struct {
 	MinExp int `yaml:"min_exp"`
 	MaxExp int `yaml:"max_exp"`
-}
-
-type Llama struct {
-	Host         string `yaml:"host"`
-	Port         int    `yaml:"port"`
-	BaseURL      string `yaml:"base_url"`
-	Embed        string `yaml:"embed"`
-	LLMBaseURL   string `yaml:"llm_base_url"`
-	Instruct     string `yaml:"instruct"`
-	BinDir       string `yaml:"bin_dir"`
-	ModelsDir    string `yaml:"models_dir"`
-	TarballFile  string `yaml:"tarball_file"`
-	TarballURL   string `yaml:"tarball_url"`
-	EmbedFile    string `yaml:"embed_file"`
-	EmbedURL     string `yaml:"embed_url"`
-	InstructFile string `yaml:"instruct_file"`
-	InstructURL  string `yaml:"instruct_url"`
-	GPULayers    int    `yaml:"gpu_layers"`
 }
 
 type Provider struct {
@@ -212,116 +193,145 @@ func Load(path string) (Config, error) {
 	} else {
 		cfg.BrowseRoot = resolvePath(root, cfg.BrowseRoot, cfg.DataDir)
 	}
-	if cfg.Ranker != "llm" {
-		cfg.Ranker = "embed"
-	}
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]Provider{}
 	}
 	cfg.ConfigPath = path
-	cfg.clamp()
-	if err := cfg.applyListen(); err != nil {
+	if err := Validate(cfg); err != nil {
 		return Config{}, err
 	}
 	applySecrets(&cfg)
 	return cfg, nil
 }
 
-func (c Config) Prompt() string {
-	return c.siblingPrompt("prompt.md", fallbackPrompt)
-}
-
-func (c Config) IngestPrompt() string {
-	return c.siblingPrompt("ingest.md", fallbackIngestPrompt)
-}
-
-func (c Config) siblingPrompt(name, fallback string) string {
-	if c.ConfigPath != "" {
-		p := filepath.Join(filepath.Dir(c.ConfigPath), name)
-		if b, err := os.ReadFile(p); err == nil && len(strings.TrimSpace(string(b))) > 0 {
-			return string(b)
-		}
+func Validate(c Config) error {
+	if strings.TrimSpace(c.Version) == "" {
+		return fmt.Errorf("version is empty")
 	}
-	return fallback
+	if strings.TrimSpace(c.HTTP.Addr) == "" {
+		return fmt.Errorf("http.addr is empty")
+	}
+	if c.HTTP.TimeoutMS <= 0 {
+		return fmt.Errorf("http.timeout_ms must be > 0")
+	}
+	if c.HTTP.Retries <= 0 {
+		return fmt.Errorf("http.retries must be > 0")
+	}
+	if c.HTTP.ProviderTimeoutMS <= 0 {
+		return fmt.Errorf("http.provider_timeout_ms must be > 0")
+	}
+	if err := validateExp("http.backoff", c.HTTP.Backoff); err != nil {
+		return err
+	}
+	if c.Session.TTLMS <= 0 {
+		return fmt.Errorf("session.ttl_ms must be > 0")
+	}
+	if c.Match.MinScore <= 0 {
+		return fmt.Errorf("match.min_score must be > 0")
+	}
+	if c.Match.MinMargin < 0 {
+		return fmt.Errorf("match.min_margin must be >= 0")
+	}
+	if c.Match.MinHits < 1 {
+		return fmt.Errorf("match.min_hits must be >= 1")
+	}
+	if c.Match.Workers < 1 {
+		return fmt.Errorf("match.workers must be >= 1")
+	}
+	if c.Match.CooldownFails < 0 {
+		return fmt.Errorf("match.cooldown_fails must be >= 0")
+	}
+	if err := validateExp("match.cooldown", c.Match.Cooldown); err != nil {
+		return err
+	}
+	if c.Group.SeqThreshold <= 0 || c.Group.SeqThreshold > 1 {
+		return fmt.Errorf("group.seq_threshold must be in (0, 1]")
+	}
+	if len(wordList(c.Group.VideoExt)) == 0 {
+		return fmt.Errorf("group.video_ext is empty")
+	}
+	if len(wordList(c.Group.Extras)) == 0 {
+		return fmt.Errorf("group.extras is empty")
+	}
+	if len(wordList(c.Group.Release)) == 0 {
+		return fmt.Errorf("group.release is empty")
+	}
+	if len(wordList(c.Group.Kinds)) == 0 {
+		return fmt.Errorf("group.kinds is empty")
+	}
+	if c.Ingest.SampleRows < 1 {
+		return fmt.Errorf("ingest.sample_rows must be >= 1")
+	}
+	return nil
+}
+
+func validateExp(name string, r ExpRange) error {
+	if r.MinExp < 0 {
+		return fmt.Errorf("%s.min_exp must be >= 0", name)
+	}
+	if r.MaxExp < r.MinExp+2 {
+		return fmt.Errorf("%s.max_exp must be >= min_exp+2", name)
+	}
+	return nil
 }
 
 func (c Config) IngestSampleRows() int {
-	if c.Ingest.SampleRows < 1 {
-		return 3
-	}
 	return c.Ingest.SampleRows
 }
 
-func (c Config) LlamaBinDir() string {
-	return c.llamaPath(c.Llama.BinDir, "vendor/llama.cpp")
+func (c Config) SeqThreshold() float64 {
+	return c.Group.SeqThreshold
 }
 
-func (c Config) LlamaModelsDir() string {
-	return c.llamaPath(c.Llama.ModelsDir, "vendor/llama.cpp/models")
+func (c Config) GroupVideoExt() map[string]struct{} {
+	return extSet(c.Group.VideoExt)
 }
 
-func (c Config) llamaPath(rel, fallback string) string {
-	base := c.ExeDir
-	if base == "" {
-		base, _ = ExeDir()
+func (c Config) GroupExtras() map[string]struct{} {
+	return wordSet(c.Group.Extras)
+}
+
+func (c Config) GroupRelease() map[string]struct{} {
+	return wordSet(c.Group.Release)
+}
+
+func (c Config) GroupKinds() map[string]struct{} {
+	return wordSet(c.Group.Kinds)
+}
+
+func wordList(list []string) []string {
+	out := make([]string, 0, len(list))
+	for _, w := range list {
+		w = strings.ToLower(strings.TrimSpace(w))
+		if w == "" {
+			continue
+		}
+		out = append(out, w)
 	}
-	return resolvePath(base, rel, fallback)
+	return out
 }
 
-func (c Config) LocalInstruct() bool {
-	llm := strings.TrimSpace(c.Llama.LLMBaseURL)
-	if llm == "" {
-		return strings.TrimSpace(c.Llama.BaseURL) != ""
+func extSet(list []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(list))
+	for _, e := range wordList(list) {
+		e = strings.TrimPrefix(e, ".")
+		if e == "" {
+			continue
+		}
+		out["."+e] = struct{}{}
 	}
-	return originHost(llm) != "" && originHost(llm) == originHost(c.Llama.BaseURL)
+	return out
 }
 
-func InstructFollowsListen(llm, probe string) bool {
-	llm = strings.TrimSpace(llm)
-	if llm == "" {
-		return true
+func wordSet(list []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(list))
+	for _, w := range wordList(list) {
+		out[w] = struct{}{}
 	}
-	return originHost(llm) != "" && originHost(llm) == originHost(probe)
-}
-
-func (c Config) ChatBaseURL() string {
-	if strings.TrimSpace(c.Llama.LLMBaseURL) == "" {
-		return c.Llama.BaseURL
-	}
-	return c.Llama.LLMBaseURL
-}
-
-func (c Config) EmbedModel() string {
-	if s := strings.TrimSpace(c.Llama.Embed); s != "" {
-		return s
-	}
-	return modelStem(c.Llama.EmbedFile)
-}
-
-func (c Config) InstructModel() string {
-	if s := strings.TrimSpace(c.Llama.Instruct); s != "" {
-		return s
-	}
-	return modelStem(c.Llama.InstructFile)
-}
-
-func originHost(raw string) string {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	return strings.ToLower(u.Host)
-}
-
-func modelStem(file string) string {
-	b := filepath.Base(strings.TrimSpace(file))
-	return strings.TrimSuffix(b, ".gguf")
+	return out
 }
 
 func (c Config) MatchWorkers() int {
-	if c.Match.Workers < 1 {
-		return 1
-	}
 	return c.Match.Workers
 }
 
@@ -333,92 +343,19 @@ func (c Config) MatchSoloScore() float64 {
 }
 
 func (c Config) MatchMinHits() int {
-	if c.Match.MinHits < 1 {
-		return 1
-	}
 	return c.Match.MinHits
 }
 
 func (c Config) MatchCooldownFails() int {
-	if c.Match.CooldownFails < 0 {
-		return 0
-	}
-	if c.Match.CooldownFails == 0 {
-		return 2
-	}
 	return c.Match.CooldownFails
 }
 
 func (c Config) MatchCooldown() ExpRange {
-	return ClampExp(c.Match.Cooldown, 16, 19)
+	return c.Match.Cooldown
 }
 
 func (c Config) HTTPBackoff() ExpRange {
-	return ClampExp(c.HTTP.Backoff, 10, 13)
-}
-
-func (c Config) LlamaProbeURL() string {
-	return llamaHTTPURL(c.Llama.Host, c.Llama.Port)
-}
-
-func (c Config) LlamaVendorURL() string {
-	return llamaHTTPURL("127.0.0.1", c.Llama.Port)
-}
-
-func llamaHTTPURL(host string, port int) string {
-	return fmt.Sprintf("http://%s:%d/v1", host, port)
-}
-
-func (c *Config) applyListen() error {
-	host := strings.TrimSpace(c.Llama.Host)
-	port := c.Llama.Port
-	if host == "" || port == 0 {
-		if u, err := url.Parse(strings.TrimSpace(c.Llama.BaseURL)); err == nil && u.Host != "" {
-			if host == "" {
-				host = u.Hostname()
-			}
-			if port == 0 {
-				if p := u.Port(); p != "" {
-					n, err := strconv.Atoi(p)
-					if err != nil {
-						return fmt.Errorf("llama.base_url port: %w", err)
-					}
-					port = n
-				}
-			}
-		}
-	}
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	if port == 0 {
-		port = 8080
-	}
-	if port < 1 || port > 65535 {
-		return fmt.Errorf("llama.port %d out of range", port)
-	}
-	c.Llama.Host = host
-	c.Llama.Port = port
-	c.Llama.BaseURL = llamaHTTPURL(host, port)
-	return nil
-}
-
-func (c *Config) clamp() {
-	c.HTTP.Backoff = c.HTTPBackoff()
-	c.Match.Cooldown = c.MatchCooldown()
-}
-
-func ClampExp(r ExpRange, defMin, defMax int) ExpRange {
-	if r.MinExp == 0 && r.MaxExp == 0 {
-		r.MinExp, r.MaxExp = defMin, defMax
-	}
-	if r.MinExp < 0 {
-		r.MinExp = 0
-	}
-	if r.MaxExp < r.MinExp+2 {
-		r.MaxExp = r.MinExp + 2
-	}
-	return r
+	return c.HTTP.Backoff
 }
 
 func JitterExp(exp int) time.Duration {
@@ -438,16 +375,10 @@ func JitterExp(exp int) time.Duration {
 }
 
 func (c Config) HTTPTimeout() time.Duration {
-	if c.HTTP.TimeoutMS <= 0 {
-		return 30 * time.Second
-	}
 	return time.Duration(c.HTTP.TimeoutMS) * time.Millisecond
 }
 
 func (c Config) ProviderTimeout() time.Duration {
-	if c.HTTP.ProviderTimeoutMS <= 0 {
-		return 10 * time.Second
-	}
 	return time.Duration(c.HTTP.ProviderTimeoutMS) * time.Millisecond
 }
 
@@ -608,6 +539,26 @@ func ReadOverlay(dataDir string) (map[string]any, error) {
 	return jsonMap(m), nil
 }
 
+func validateOverlay(cfg Config, overlay map[string]any) error {
+	base, err := os.ReadFile(cfg.ConfigPath)
+	if err != nil {
+		return err
+	}
+	over, err := yaml.Marshal(overlay)
+	if err != nil {
+		return err
+	}
+	raw, err := merge(base, over)
+	if err != nil {
+		return err
+	}
+	decoded, err := decode(raw)
+	if err != nil {
+		return err
+	}
+	return Validate(decoded)
+}
+
 func Overlay(cfg *Config, patch map[string]any) (map[string]any, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is required")
@@ -620,7 +571,7 @@ func Overlay(cfg *Config, patch map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	mergeMap(cur, patch)
-	if err := coerceLlamaPort(cur); err != nil {
+	if err := validateOverlay(*cfg, cur); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
@@ -639,45 +590,6 @@ func Overlay(cfg *Config, patch map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	return jsonMap(cur), nil
-}
-
-func coerceLlamaPort(m map[string]any) error {
-	lm, ok := asMap(m["llama"])
-	if !ok {
-		return nil
-	}
-	m["llama"] = lm
-	v, ok := lm["port"]
-	if !ok || v == nil {
-		return nil
-	}
-	n, err := intPort(v)
-	if err != nil {
-		return err
-	}
-	if n < 1 || n > 65535 {
-		return fmt.Errorf("llama.port %d out of range", n)
-	}
-	lm["port"] = n
-	return nil
-}
-
-func intPort(v any) (int, error) {
-	switch n := v.(type) {
-	case int:
-		return n, nil
-	case int64:
-		return int(n), nil
-	case uint64:
-		return int(n), nil
-	case float64:
-		if n != float64(int(n)) {
-			return 0, fmt.Errorf("llama.port must be an integer")
-		}
-		return int(n), nil
-	default:
-		return 0, fmt.Errorf("llama.port invalid")
-	}
 }
 
 func jsonMap(m map[string]any) map[string]any {

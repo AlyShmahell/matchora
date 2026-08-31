@@ -1,6 +1,6 @@
 # Match
 
-Providers are declared in [matchora/share/config/default.yaml](../../matchora/share/config/default.yaml). The engine is a generic GET + JSON-path walker. No provider names are hardcoded in Go. llama.cpp install and spawn are in [architecture](../architecture.md).
+Providers are declared in [matchora/share/config/default.yaml](../../matchora/share/config/default.yaml). The engine is a generic GET + JSON-path walker. No provider names are hardcoded in Go.
 
 Shipped defaults:
 
@@ -18,7 +18,7 @@ Type lists are an allowlist. A typed job only calls providers that list that typ
 
 Pending jobs run up to `match.workers` at a time (default `8`; values below 1 become 1). Each job gets its own `http.timeout_ms` clock; a slow deferred call does not hold or cancel the rest of the batch. Provider `min_interval_ms` still paces that provider across those goroutines.
 
-GET retries, per-attempt timeout (`provider_timeout_ms`), and **capped exponential backoff** come from the `http` section (`http.backoff.min_exp` / `max_exp`, default 10/13). A provider may set `retries` and/or `provider_timeout_ms` to override those values for its own GETs (search, episode, catalog, detail, poster). Zero or omitted keeps the global `http` values. After a failed GET the wait is uniform random in `[2^(exp-1), 2^exp]` ms, starting at `min_exp+1` and capped at `max_exp`. `Retry-After` still wins when present, capped at `2^max_exp` ms. Provider search does not wrap all retries in that timeout. POST (embeddings / chat) is not retried. `POST /v1/retry` rematches `status: error` and `status: unmatched` rows.
+GET retries, per-attempt timeout (`provider_timeout_ms`), and **capped exponential backoff** come from the `http` section (`http.backoff.min_exp` / `max_exp`, default 10/13). A provider may set `retries` and/or `provider_timeout_ms` to override those values for its own GETs (search, episode, catalog, detail, poster). Zero or omitted keeps the global `http` values. After a failed GET the wait is uniform random in `[2^(exp-1), 2^exp]` ms, starting at `min_exp+1` and capped at `max_exp`. `Retry-After` still wins when present, capped at `2^max_exp` ms. Provider search does not wrap all retries in that timeout. `POST /v1/retry` rematches `status: error` and `status: unmatched` rows.
 
 A provider that **errors after retries** on `match.cooldown_fails` jobs in a row (default 2 if unset; shipped YAML is 5) is skipped for a jittered cooldown from `match.cooldown.min_exp` / `max_exp` (default 16/19: first skip ~1–2 min, cap ~4.4–8.7 min). Each cooldown start bumps the exponent; a later success resets streak and exponent. Empty 200s do not count. A dead parent context (batch leftover or cancel) is not a failure; a per-attempt timeout while the job context is still alive is. The cooldown list lives on the worker for the process lifetime.
 
@@ -34,10 +34,7 @@ Stdlib HTTP. User-Agent `matchora/{version}`.
 
 ## Ranking
 
-1. **embed** (`llama.base_url`, derived from `llama.host` / `llama.port`, default `http://127.0.0.1:8080/v1`) — MiniLM, `POST /v1/embeddings`, cosine similarity. Requests send `embed` or the embed file stem as `"model"`. Set host/port via YAML or `POST /v1/config` `{"llama":{"host","port"}}`.
-2. **llm** (`llama.llm_base_url`) — `POST /v1/chat/completions`. Default is the same origin as `base_url` (one local router). Point this URL elsewhere to skip the local instruct GGUF. Chat sends `instruct` or the instruct file stem as `"model"`.
-
-`ranker: embed|llm` in YAML (default embed). If the embed server is down, lexical token overlap + year bonus; record `ranker: lexical`.
+SequenceMatcher ratio of the job title against each candidate title (plus year). Exact normalized titles score `1.0`. Synopsis is not used. Matching year adds `0.15`. Jobs record `ranker: seq`.
 
 Grouped and ingested jobs share `runOne`.
 
@@ -48,13 +45,13 @@ Grouped and ingested jobs share `runOne`.
 - **CSV** with a header. Canonical fields: `title` (required), `year`, `type`, `season`, `episode`, `imdb`.
 - **JSON** array of the same fields.
 
-Unknown CSV headers are mapped from `ingest.aliases` (normalized names, e.g. `media_type` → `type`). If `title` is still missing, one instruct call uses `{exeDir}/config/ingest.md` plus a few sample rows and returns `{"columns":{"title":"…"}}` (source header names). Type cells are then rewritten from `ingest.types` (`episode` / `season` → `tv`). Chat failure keeps the alias map; missing `title` is still `400`. Format is detected from `Content-Type`, filename (`.csv` / `.json`), or the first non-space byte (`[` vs a header).
+Unknown CSV headers are mapped from `ingest.aliases` (normalized names, e.g. `media_type` → `type`). If `title` is still missing, unused headers are matched to canonical fields (and alias keys) with SequenceMatcher when the ratio is at least `group.seq_threshold`. Type cells are then rewritten from `ingest.types` (`episode` / `season` → `tv`). Missing `title` is still `400`. Format is detected from `Content-Type`, filename (`.csv` / `.json`), or the first non-space byte (`[` vs a header).
 
 ## Scan
 
-`POST /v1/scan` with `{ "path": "..." }` lists video files under a directory inside `browse_root`, returns `202 {"session","files"}` immediately, then groups each immediate child with instruct chat into unique titles (`source: scan`) **before** provider search. Prompt lives in `{exeDir}/config/prompt.md`. `GET /v1/scan/status?session=` reports `{files, done, chunks, chunk, running}` (`chunks` is the number of immediate children). A later scan or ingest mints a new session; poll `GET /v1/jobs?session=` for that id only.
+`POST /v1/scan` with `{ "path": "..." }` lists video files under a directory inside `browse_root`, returns `202 {"session","files"}` immediately, then groups each immediate child on disk into unique titles (`source: scan`) **before** provider search. The grouper is structure-first (seasons, extras, named siblings, release dumps) with SequenceMatcher clustering for leftover loose videos. Word lists and `seq_threshold` live under `group:` in YAML; match/http numbers live under those YAML sections. Missing required keys fail start. `GET /v1/scan/status?session=` reports `{files, done, chunks, chunk, running}` (`chunks` is the number of immediate children). A later scan or ingest mints a new session; poll `GET /v1/jobs?session=` for that id only.
 
-Go lists immediate children of the scan path (video files and directories). For a folder it sends a compact subcontent listing (child dirs with video counts and a few sample names) plus a Path line (relative to `browse_root`). One instruct call per child returns unique titles and the title folder path (`{"shows":[{"title","year","path"}]}`). Path must be copied from the Path line, or `{Path}/{child}` for a non-season child. Chat failure uses the Folder/File name (spaced dash to colon; Parent when Folder is Season N) and the listing Path. Each child is appended and matching is kicked before the next folder is grouped. Skip a child only when the title hint is missing or looks like a filename / SxxExx.
+Go lists immediate children of the scan path (video files and directories). Each child is walked on disk and emits `{title, year, path}` rows relative to `browse_root`. Season-only trees keep the folder title. Named sibling folders become their own titles. Year is taken only when a `(YYYY)` suffix or trailing year token appears in the tree. Each child is appended and matching is kicked before the next folder is grouped. Skip a child only when no usable title remains.
 
 Expected trees (Plex / Jellyfin / Infuse):
 

@@ -5,7 +5,4 @@ test -f /opt/matchora/config/default.yaml
 test -f /opt/matchora/public/index.html
 test -f /opt/matchora/public/style.css
 test -f /opt/matchora/public/app.js
-ver="$(dpkg-query -W -f='${Version}' mesa-vulkan-drivers)"
-echo "$ver" | grep -qE '^(2[4-9]|[3-9][0-9])\.'
-ls /usr/share/vulkan/icd.d/radeon_icd*.json >/dev/null
 echo "image ok"

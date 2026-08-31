@@ -66,20 +66,20 @@ func TestRunOneSkipsDeferredWhenManualHighScores(t *testing.T) {
 	var jk atomic.Int32
 	tvmaze := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]any{
-			map[string]any{"score": 1, "show": map[string]any{"id": 1, "name": "Girls", "premiered": "2012", "url": "http://t"}},
-			map[string]any{"score": 1, "show": map[string]any{"id": 2, "name": "Girls Again", "premiered": "2013", "url": "http://t2"}},
+			map[string]any{"score": 1, "show": map[string]any{"id": 1, "name": "The Amazing Girls Show", "premiered": "2012", "url": "http://t"}},
+			map[string]any{"score": 1, "show": map[string]any{"id": 2, "name": "The Amazing Girls Shows", "premiered": "2013", "url": "http://t2"}},
 		})
 	}))
 	t.Cleanup(tvmaze.Close)
 	jikan := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		jk.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": []any{map[string]any{"mal_id": 1, "title": "Girls", "year": 2012, "url": "http://j"}},
+			"data": []any{map[string]any{"mal_id": 1, "title": "The Amazing Girls Show", "year": 2012, "url": "http://j"}},
 		})
 	}))
 	t.Cleanup(jikan.Close)
 	cfg := deferPairConfig(tvmaze.URL, jikan.URL)
-	job := runOne(context.Background(), cfg, newHTTP(cfg), Job{Title: "Girls"})
+	job := runOne(context.Background(), cfg, newHTTP(cfg), Job{Title: "The Amazing Girls Show"})
 	if job.Status != "manual" {
 		t.Fatalf("status=%s err=%s candidates=%+v", job.Status, job.Error, job.Candidates)
 	}

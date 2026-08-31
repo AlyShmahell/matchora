@@ -43,16 +43,8 @@ body {
   border: 1px solid var(--line);
   padding: 1px 6px;
 }
-.model-chips {
-  margin-left: auto;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  justify-content: flex-end;
-}
-.chip-model { color: #6a9cc9; border-color: #6a9cc9; font-size: 10px; }
 .status {
+  margin-left: auto;
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 10px;

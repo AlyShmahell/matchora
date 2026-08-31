@@ -183,24 +183,6 @@ async function postSecrets(body) {
   status.textContent = "saved";
 }
 
-async function loadLlama() {
-  const host = $("llama-host");
-  const port = $("llama-port");
-  if (!host || !port) {
-    return;
-  }
-  try {
-    const r = await fetch("/v1/config");
-    const j = await r.json();
-    const llama = j && j.llama ? j.llama : {};
-    host.value = llama.host || "127.0.0.1";
-    port.value = llama.port || 8080;
-  } catch {
-    host.value = host.value || "127.0.0.1";
-    port.value = port.value || 8080;
-  }
-}
-
 async function clearSecret(key) {
   const body = {};
   body[key] = "";
@@ -215,31 +197,9 @@ async function pollHealth() {
     const ok = r.ok && j.healthy === true;
     el.textContent = ok ? "healthy" : "down";
     el.className = "status " + (ok ? "ok" : "down");
-    renderModelChips(j.models);
   } catch {
     el.textContent = "down";
     el.className = "status down";
-    renderModelChips([]);
-  }
-}
-
-function renderModelChips(models) {
-  const box = $("model-chips");
-  box.replaceChildren();
-  if (!Array.isArray(models)) {
-    return;
-  }
-  for (const m of models) {
-    if (!m || !m.name) {
-      continue;
-    }
-    const chip = document.createElement("span");
-    chip.className = "chip chip-model";
-    const tok = Number(m.tok_s);
-    const rate = Number.isFinite(tok) ? tok.toFixed(1) : "—";
-    const device = m.device === "cpu" || m.device === "gpu" ? m.device : "";
-    chip.textContent = [m.role, m.name, rate + " tok/s", device].filter(Boolean).join(" ");
-    box.appendChild(chip);
   }
 }
 
@@ -735,42 +695,6 @@ $("secrets").addEventListener("submit", async (ev) => {
   await postSecrets(body);
 });
 
-$("llama").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const status = $("llama-status");
-  status.hidden = false;
-  const host = $("llama-host").value.trim() || "127.0.0.1";
-  const port = Number($("llama-port").value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    status.textContent = "port must be 1–65535";
-    return;
-  }
-  try {
-    const r = await fetch("/v1/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ llama: { host, port } }),
-    });
-    let payload = null;
-    try {
-      payload = await r.json();
-    } catch {
-      payload = null;
-    }
-    if (!r.ok) {
-      status.textContent = r.status + (payload && payload.error ? " " + payload.error : "");
-      return;
-    }
-  } catch {
-    /* connection drop on restart */
-  }
-  if (!(await waitUntilHealthy(status))) {
-    return;
-  }
-  await loadLlama();
-  status.textContent = "saved";
-});
-
 $("clear").addEventListener("click", async () => {
   if (!confirm("Clear all jobs?")) {
     return;
@@ -866,7 +790,6 @@ pollHealth();
 setInterval(pollHealth, 4000);
 initSkipCheckbox();
 loadSecrets();
-loadLlama();
 browse("");
 loadSession().then(() => loadJobs()).then(async (jobs) => {
   const st = await loadScanStatus();

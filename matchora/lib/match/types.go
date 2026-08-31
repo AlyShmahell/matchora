@@ -1,5 +1,18 @@
 package match
 
+type Cleaned struct {
+	Title   string `json:"title"`
+	Year    string `json:"year"`
+	Type    string `json:"type"`
+	Season  string `json:"season"`
+	Episode string `json:"episode"`
+}
+
+type Grouped struct {
+	Cleaned
+	Path string
+}
+
 type Candidate struct {
 	Provider string            `json:"provider"`
 	ID       string            `json:"id"`

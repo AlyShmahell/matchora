@@ -19,7 +19,6 @@ import (
 	"github.com/alyshmahell/matchora/lib/ingest"
 	"github.com/alyshmahell/matchora/lib/jobs"
 	"github.com/alyshmahell/matchora/lib/library"
-	"github.com/alyshmahell/matchora/lib/llama"
 	"github.com/alyshmahell/matchora/lib/match"
 	"github.com/alyshmahell/matchora/lib/scan"
 )
@@ -30,7 +29,6 @@ func main() {
 		log.Fatal(err)
 	}
 	configPath := flag.String("config", "", "path to default.yaml")
-	prepare := flag.Bool("prepare", false, "install llama.cpp runtime and models, then exit")
 	flag.Parse()
 	path := strings.TrimSpace(*configPath)
 	if path == "" {
@@ -46,14 +44,6 @@ func main() {
 	if err := os.MkdirAll(cfg.BrowseRoot, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	if err := llama.Start(&cfg); err != nil {
-		llama.Stop()
-		log.Fatal(err)
-	}
-	if *prepare {
-		llama.Stop()
-		return
-	}
 	store := jobs.New(cfg.DataDir)
 	worker := jobs.NewWorker(&cfg, store)
 	scans := newScanRun()
@@ -64,7 +54,6 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"healthy": true,
 			"version": cfg.Version,
-			"models":  llama.Stats(cfg),
 		})
 	})
 	mux.HandleFunc("GET /v1/fs", func(w http.ResponseWriter, r *http.Request) {
@@ -157,10 +146,11 @@ func main() {
 		over, err := config.Overlay(&cfg, patch)
 		if err != nil {
 			status := http.StatusInternalServerError
-			if strings.Contains(err.Error(), "llama.port") || strings.Contains(err.Error(), "json object") {
+			msg := err.Error()
+			if strings.Contains(msg, "json object") || strings.Contains(msg, " is empty") || strings.Contains(msg, " must be") {
 				status = http.StatusBadRequest
 			}
-			writeJSON(w, status, map[string]string{"error": err.Error()})
+			writeJSON(w, status, map[string]string{"error": msg})
 			return
 		}
 		writeJSON(w, http.StatusOK, over)
@@ -467,7 +457,7 @@ func main() {
 	}
 	mux.Handle("GET /", http.FileServer(http.Dir(public)))
 
-	log.Printf("matchora %s listening on %s (data=%s ranker=%s)", cfg.Version, cfg.HTTP.Addr, cfg.DataDir, cfg.Ranker)
+	log.Printf("matchora %s listening on %s (data=%s)", cfg.Version, cfg.HTTP.Addr, cfg.DataDir)
 	if err := http.ListenAndServe(cfg.HTTP.Addr, mux); err != nil {
 		log.Fatal(err)
 	}
@@ -525,7 +515,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func restartSoon() {
 	go func() {
 		time.Sleep(time.Second)
-		llama.Stop()
 		exe, err := os.Executable()
 		if err != nil {
 			log.Fatalf("restart: %v", err)
@@ -645,7 +634,7 @@ func enqueueScan(ctx context.Context, cfg config.Config, store *jobs.Store, work
 		if ctx.Err() != nil {
 			return
 		}
-		created := jobsFromShows(match.Group(ctx, cfg, childListing(cfg.BrowseRoot, child)), cfg.BrowseRoot, child)
+		created := jobsFromShows(match.Group(cfg, cfg.BrowseRoot, child.Path), cfg.BrowseRoot, child)
 		if ctx.Err() != nil {
 			return
 		}
@@ -664,23 +653,6 @@ func enqueueScan(ctx context.Context, cfg config.Config, store *jobs.Store, work
 		}
 		scans.step(session, n)
 	}
-}
-
-func childListing(root string, child scan.Child) string {
-	rel, err := filepath.Rel(root, child.Path)
-	if err != nil {
-		rel = filepath.Base(child.Path)
-	}
-	rel = filepath.ToSlash(rel)
-	if rel == "." || rel == "" {
-		rel = filepath.Base(child.Path)
-	}
-	var b strings.Builder
-	b.WriteString("Path: ")
-	b.WriteString(rel)
-	b.WriteByte('\n')
-	b.WriteString(child.Listing)
-	return b.String()
 }
 
 func jobsFromShows(shows []match.Grouped, root string, child scan.Child) []match.Job {

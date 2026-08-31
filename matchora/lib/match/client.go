@@ -38,13 +38,7 @@ func (c *httpClient) forSpec(spec config.Provider) *httpClient {
 func newHTTP(cfg config.Config) *httpClient {
 	timeout := cfg.HTTPTimeout()
 	retries := cfg.HTTP.Retries
-	if retries <= 0 {
-		retries = 3
-	}
 	attempt := cfg.ProviderTimeout()
-	if attempt <= 0 {
-		attempt = 10 * time.Second
-	}
 	br := cfg.HTTPBackoff()
 	return &httpClient{
 		hc:             &http.Client{Timeout: timeout},

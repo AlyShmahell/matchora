@@ -75,59 +75,6 @@ func main() {
 		}
 		writeJSON(w, map[string]any{"data": data})
 	})
-	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Messages []struct {
-				Content string `json:"content"`
-			} `json:"messages"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		blob := ""
-		for _, m := range req.Messages {
-			blob += strings.ToLower(m.Content)
-		}
-		var content []byte
-		if strings.Contains(blob, `"columns"`) || strings.Contains(blob, "column headers") || strings.Contains(blob, "map csv") {
-			content, _ = json.Marshal(map[string]any{
-				"columns": map[string]string{
-					"title":   "title",
-					"year":    "year",
-					"type":    "type",
-					"season":  "season",
-					"episode": "episode",
-					"imdb":    "imdb",
-				},
-			})
-		} else if strings.Contains(blob, `"shows"`) || strings.Contains(blob, "unique titles") {
-			shows := []map[string]string{}
-			if strings.Contains(blob, "girls") {
-				shows = append(shows, map[string]string{"title": "Girls", "year": "2012", "type": "tv"})
-			}
-			if strings.Contains(blob, "bebop") || strings.Contains(blob, "cowboy") {
-				shows = append(shows, map[string]string{"title": "Cowboy Bebop", "year": "1998", "type": "anime"})
-			}
-			content, _ = json.Marshal(map[string]any{"shows": shows})
-		} else {
-			title, year, typ := "Unknown", "", ""
-			if strings.Contains(blob, "girls") {
-				title, year, typ = "Girls", "2012", "tv"
-			} else if strings.Contains(blob, "bebop") || strings.Contains(blob, "cowboy") {
-				title, year, typ = "Cowboy Bebop", "1998", "anime"
-			}
-			content, _ = json.Marshal(map[string]string{
-				"title": title,
-				"year":  year,
-				"type":  typ,
-			})
-		}
-		writeJSON(w, map[string]any{
-			"choices": []any{
-				map[string]any{
-					"message": map[string]string{"content": string(content)},
-				},
-			},
-		})
-	})
 	addr := ":8080"
 	if v := os.Getenv("STUB_ADDR"); v != "" {
 		addr = v

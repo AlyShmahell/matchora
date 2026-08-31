@@ -7,13 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"unicode"
 
 	"github.com/alyshmahell/matchora/lib/config"
+	"github.com/alyshmahell/matchora/lib/match"
 )
 
 var fields = []string{"title", "year", "type", "season", "episode", "imdb"}
@@ -40,7 +39,7 @@ func Parse(ctx context.Context, cfg config.Config, r io.Reader, name, contentTyp
 	case "json":
 		return parseJSON(cfg, raw)
 	default:
-		return parseCSV(ctx, cfg, raw)
+		return parseCSV(cfg, raw)
 	}
 }
 
@@ -73,7 +72,7 @@ func parseJSON(cfg config.Config, raw []byte) ([]Row, error) {
 	return validate(cfg, rows)
 }
 
-func parseCSV(ctx context.Context, cfg config.Config, raw []byte) ([]Row, error) {
+func parseCSV(cfg config.Config, raw []byte) ([]Row, error) {
 	cr := csv.NewReader(bytes.NewReader(raw))
 	cr.TrimLeadingSpace = true
 	recs, err := cr.ReadAll()
@@ -86,9 +85,7 @@ func parseCSV(ctx context.Context, cfg config.Config, raw []byte) ([]Row, error)
 	headers := recs[0]
 	cmap := deterministicMap(headers, cfg.Ingest.Aliases)
 	if _, ok := cmap["title"]; !ok {
-		if mapped, err := askColumns(ctx, cfg, headers, recs[1:]); err == nil {
-			mergeColumns(cmap, headers, mapped)
-		}
+		mergeColumns(cmap, headers, seqMapHeaders(headers, cmap, cfg))
 	}
 	if _, ok := cmap["title"]; !ok {
 		return nil, fmt.Errorf("csv: missing title column")
@@ -167,133 +164,71 @@ func mergeColumns(cmap map[string]int, headers []string, mapped map[string]strin
 	}
 }
 
-func askColumns(ctx context.Context, cfg config.Config, headers []string, rows [][]string) (map[string]string, error) {
-	base := strings.TrimSpace(cfg.ChatBaseURL())
-	if base == "" {
-		return nil, fmt.Errorf("no instruct")
-	}
-	n := cfg.IngestSampleRows()
-	if n > len(rows) {
-		n = len(rows)
-	}
-	system := strings.TrimSpace(cfg.IngestPrompt())
-	if hints := aliasHints(cfg.Ingest.Aliases); hints != "" {
-		system = strings.TrimSpace(system + "\n\n" + hints)
-	}
-	raw, err := chatJSON(ctx, cfg, system, columnUser(headers, rows[:n]))
-	if err != nil {
-		return nil, err
-	}
-	return parseColumns(raw)
+type seqCand struct {
+	field string
+	src   string
+	score float64
 }
 
-func aliasHints(aliases map[string]string) string {
-	if len(aliases) == 0 {
-		return ""
+func seqMapHeaders(headers []string, cmap map[string]int, cfg config.Config) map[string]string {
+	takenField := map[string]bool{}
+	takenIdx := map[int]bool{}
+	for f, i := range cmap {
+		takenField[f] = true
+		takenIdx[i] = true
 	}
-	parts := make([]string, 0, len(aliases))
-	for alias, field := range aliases {
-		alias = strings.TrimSpace(alias)
-		field = strings.TrimSpace(field)
-		if alias == "" || field == "" {
+	type target struct{ name, field string }
+	var targets []target
+	for _, f := range fields {
+		targets = append(targets, target{name: f, field: f})
+	}
+	for alias, field := range cfg.Ingest.Aliases {
+		field = strings.ToLower(strings.TrimSpace(field))
+		if !isField(field) {
 			continue
 		}
-		parts = append(parts, alias+" often means "+field)
+		targets = append(targets, target{name: alias, field: field})
 	}
-	if len(parts) == 0 {
-		return ""
+	thresh := cfg.SeqThreshold()
+	var cands []seqCand
+	for i, h := range headers {
+		if takenIdx[i] {
+			continue
+		}
+		hn := strings.ToLower(strings.TrimSpace(h))
+		if hn == "" {
+			continue
+		}
+		for _, t := range targets {
+			if takenField[t.field] {
+				continue
+			}
+			r := match.SeqRatio(hn, strings.ToLower(strings.TrimSpace(t.name)))
+			if r >= thresh {
+				cands = append(cands, seqCand{field: t.field, src: h, score: r})
+			}
+		}
 	}
-	sort.Strings(parts)
-	return "Hints: " + strings.Join(parts, "; ") + "."
-}
-
-func columnUser(headers []string, samples [][]string) string {
-	var b strings.Builder
-	b.WriteString("Header: ")
-	b.WriteString(strings.Join(headers, ","))
-	b.WriteByte('\n')
-	if len(samples) == 0 {
-		return b.String()
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].score != cands[j].score {
+			return cands[i].score > cands[j].score
+		}
+		if cands[i].field != cands[j].field {
+			return cands[i].field < cands[j].field
+		}
+		return cands[i].src < cands[j].src
+	})
+	mapped := map[string]string{}
+	usedSrc := map[string]bool{}
+	for _, c := range cands {
+		if takenField[c.field] || usedSrc[c.src] {
+			continue
+		}
+		mapped[c.field] = c.src
+		takenField[c.field] = true
+		usedSrc[c.src] = true
 	}
-	b.WriteString("Samples:\n")
-	for _, rec := range samples {
-		b.WriteString(strings.Join(rec, ","))
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func parseColumns(raw []byte) (map[string]string, error) {
-	s := strings.TrimSpace(string(raw))
-	s = strings.TrimPrefix(s, "```json")
-	s = strings.TrimPrefix(s, "```")
-	s = strings.TrimSuffix(s, "```")
-	s = strings.TrimSpace(s)
-	var wrap struct {
-		Columns map[string]string `json:"columns"`
-	}
-	if err := json.Unmarshal([]byte(s), &wrap); err != nil {
-		return nil, err
-	}
-	if len(wrap.Columns) == 0 {
-		return nil, fmt.Errorf("empty columns")
-	}
-	return wrap.Columns, nil
-}
-
-func chatJSON(ctx context.Context, cfg config.Config, system, user string) ([]byte, error) {
-	payload := map[string]any{
-		"messages": []map[string]string{
-			{"role": "system", "content": system},
-			{"role": "user", "content": user},
-		},
-		"temperature":     0,
-		"max_tokens":      256,
-		"response_format": map[string]string{"type": "json_object"},
-	}
-	if id := cfg.InstructModel(); id != "" {
-		payload["model"] = id
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	endpoint, err := url.JoinPath(strings.TrimRight(cfg.ChatBaseURL(), "/"), "chat/completions")
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: cfg.HTTPTimeout()}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
-	}
-	var out struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, err
-	}
-	if len(out.Choices) == 0 {
-		return nil, fmt.Errorf("empty chat")
-	}
-	return []byte(out.Choices[0].Message.Content), nil
+	return mapped
 }
 
 func validate(cfg config.Config, rows []Row) ([]Row, error) {

@@ -15,7 +15,6 @@ services:
       dockerfile: Containerfile
     volumes:
       - ../build/dist:/opt/matchora:z
-      - matchora-vendor:/opt/matchora/vendor:z
       - ./fixtures/library:/opt/matchora/data/library:z
       - ./config.yaml:/run/matchora/config.yaml:z
     tmpfs:
@@ -27,8 +26,8 @@ services:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7680/health"]
       interval: 5s
       timeout: 3s
-      retries: 36
-      start_period: 300s
+      retries: 12
+      start_period: 15s
 
   check:
     build:
@@ -44,7 +43,7 @@ services:
     volumes:
       - ../matchora:/src:z
     working_dir: /src
-    command: ["go", "test", "-buildvcs=false", "./lib/llama", "./lib/match", "./lib/scan", "./lib/config", "./lib/jobs", "./lib/ingest", "./lib/library"]
+    command: ["go", "test", "-buildvcs=false", "./lib/match", "./lib/scan", "./lib/config", "./lib/jobs", "./lib/ingest", "./lib/library"]
 
   tester:
     build:
@@ -62,7 +61,6 @@ services:
       dockerfile: Containerfile
     volumes:
       - ../build/dist:/opt/matchora:z
-      - matchora-vendor:/opt/matchora/vendor:z
     tmpfs:
       - /opt/matchora/data
     healthcheck:
@@ -70,7 +68,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 36
-      start_period: 300s
+      start_period: 15s
 
   live:
     profiles: ["live"]
@@ -81,6 +79,3 @@ services:
       matchora-live:
         condition: service_healthy
     command: ["/live/run"]
-
-volumes:
-  matchora-vendor:

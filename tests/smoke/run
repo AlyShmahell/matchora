@@ -24,14 +24,11 @@ echo "$html" | grep -q "chip-manual"
 echo "$html" | grep -q "chip-pending"
 echo "$html" | grep -q "chip-failure"
 echo "$html" | grep -q "chip-group"
-echo "$html" | grep -q "model-chips"
 echo "$html" | grep -q 'id="waits"'
 echo "$html" | grep -q 'id="clear"'
 echo "$html" | grep -q "<progress"
 echo "$html" | grep -q 'id="secrets"'
 echo "$html" | grep -q 'id="secret-fields"'
-echo "$html" | grep -q 'id="llama"'
-echo "$html" | grep -q 'id="llama-host"'
 
 cfg="$(curl -sf "$URL/v1/config")"
 echo "$cfg" | grep -q '^{}'
@@ -64,7 +61,6 @@ wait_after_restart() {
 got="$(curl -sf "$URL/v1/secrets")"
 echo "$got" | grep -q '"omdb":false'
 echo "$got" | grep -q '"tmdb":false'
-echo "$got" | grep -qv 'llama_url'
 
 # POST restarts the process; curl may drop after the 200. Wait for downtime then health.
 curl -sS -o /dev/null -H 'Content-Type: application/json' \
@@ -100,7 +96,7 @@ i=0
 while [ "$i" -lt 40 ]; do
   jobs="$(curl -sf "$URL/v1/jobs?session=$ingsess")"
   if echo "$jobs" | grep -q '"status":"matched"' \
-    && echo "$jobs" | grep -q '"ranker":"embed"' \
+    && echo "$jobs" | grep -q '"ranker":"seq"' \
     && echo "$jobs" | grep -q '"provider":"tvmaze"' \
     && echo "$jobs" | grep -q '"provider":"jikan"' \
     && echo "$jobs" | grep -q '"catalog_for"' \
@@ -111,7 +107,7 @@ while [ "$i" -lt 40 ]; do
   sleep 1
 done
 echo "$jobs" | grep -q '"status":"matched"'
-echo "$jobs" | grep -q '"ranker":"embed"'
+echo "$jobs" | grep -q '"ranker":"seq"'
 echo "$jobs" | grep -q '"provider":"tvmaze"'
 echo "$jobs" | grep -q '"provider":"jikan"'
 echo "$jobs" | grep -q '"catalog_for"'
@@ -154,7 +150,7 @@ while [ "$i" -lt 40 ]; do
     && echo "$jobs" | grep -q '"title":"Girls"' \
     && echo "$jobs" | grep -q '"title":"Cowboy Bebop"' \
     && echo "$jobs" | grep -q '"status":"matched"' \
-    && echo "$jobs" | grep -q '"ranker":"embed"' \
+    && echo "$jobs" | grep -q '"ranker":"seq"' \
     && ! echo "$jobs" | grep -q '"status":"pending"'; then
     break
   fi
@@ -164,7 +160,7 @@ done
 echo "$jobs" | grep -q '"source":"scan"'
 echo "$jobs" | grep -q '"title":"Girls"'
 echo "$jobs" | grep -q '"title":"Cowboy Bebop"'
-echo "$jobs" | grep -q '"ranker":"embed"'
+echo "$jobs" | grep -q '"ranker":"seq"'
 echo "$jobs" | grep -q '"status":"matched"'
 ! echo "$jobs" | grep -q '"status":"pending"'
 

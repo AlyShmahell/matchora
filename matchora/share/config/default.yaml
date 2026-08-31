@@ -6,8 +6,7 @@ http:
     min_exp: 10
     max_exp: 13
   provider_timeout_ms: 10000
-version: "0.0.3"
-ranker: embed
+version: "0.0.4"
 session:
   ttl_ms: 86400000
 match:
@@ -24,22 +23,74 @@ match:
     anime:
       language: Japanese
       kind: Animation
-llama:
-  host: "127.0.0.1"
-  port: 8080
-  base_url: "http://127.0.0.1:8080/v1"
-  embed: ""
-  llm_base_url: "http://127.0.0.1:8080/v1"
-  instruct: ""
-  bin_dir: vendor/llama.cpp
-  models_dir: vendor/llama.cpp/models
-  tarball_file: llama-b10453-bin-ubuntu-vulkan-x64.tar.gz
-  tarball_url: "https://github.com/ggml-org/llama.cpp/releases/download/b10453/llama-b10453-bin-ubuntu-vulkan-x64.tar.gz"
-  embed_file: all-MiniLM-L6-v2-Q4_K_M.gguf
-  embed_url: "https://huggingface.co/second-state/All-MiniLM-L6-v2-Embedding-GGUF/resolve/main/all-MiniLM-L6-v2-Q4_K_M.gguf"
-  instruct_file: SmolLM2-135M-Instruct-Q8_0.gguf
-  instruct_url: "https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf"
-  gpu_layers: 999
+group:
+  seq_threshold: 0.72
+  video_ext: [mkv, mp4, avi, m4v, ts, m2ts]
+  extras:
+    - behind the scenes
+    - deleted scenes
+    - trailers
+    - interviews
+    - scenes
+    - featurettes
+    - shorts
+    - other
+    - extra
+    - extras
+    - openings
+    - endings
+    - openings & endings
+    - nc
+    - ncop
+    - nced
+  release:
+    - 1080p
+    - 720p
+    - 480p
+    - 2160p
+    - 4k
+    - bluray
+    - blu-ray
+    - web-dl
+    - webrip
+    - web
+    - hdtv
+    - x264
+    - x265
+    - h264
+    - h265
+    - hevc
+    - avc
+    - av1
+    - aac
+    - ac3
+    - dts
+    - opus
+    - hdr
+    - hdr10
+    - dv
+    - remux
+    - proper
+    - repack
+    - internal
+    - multi
+    - dual
+    - audio
+    - subs
+    - subbed
+    - dubbed
+    - uncensored
+    - 10bit
+    - 10-bit
+    - 8bit
+    - bd
+    - nf
+    - amzn
+    - dsnp
+    - hmax
+    - cr
+    - bili
+  kinds: [ova, ovas, oad, oads, special, specials, movie, movies, film]
 ingest:
   sample_rows: 3
   aliases:

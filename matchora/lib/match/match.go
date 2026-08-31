@@ -8,15 +8,7 @@ import (
 	"github.com/alyshmahell/matchora/lib/config"
 )
 
-var (
-	ErrNotImplemented    = errors.New("not_implemented")
-	errCandidateNotFound = errors.New("candidate not found")
-)
-
-func Match(query string, candidates []Candidate) ([]Candidate, error) {
-	_, _ = query, candidates
-	return nil, ErrNotImplemented
-}
+var errCandidateNotFound = errors.New("candidate not found")
 
 func Run(ctx context.Context, cfg config.Config, jobs []Job) []Job {
 	return RunWith(ctx, cfg, jobs, nil)
@@ -88,21 +80,11 @@ func skipDefer(cfg config.Config, ranked []Candidate) bool {
 }
 
 func finishRank(ctx context.Context, cfg config.Config, httpc *httpClient, job Job, cands []Candidate) Job {
-	name := cfg.Ranker
-	if name == "" {
-		name = "embed"
-	}
-	done := waitStart(ctx, job, name)
+	done := waitStart(ctx, job, "seq")
 	cands = preferCandidates(cfg, job.Type, cands)
-	ranker, ranked, err := rank(ctx, cfg, httpc, job.QueryText(), cands)
-	done(err)
-	if err != nil {
-		job.Status = "error"
-		job.Error = err.Error()
-		job.Candidates = cands
-		return job
-	}
-	job.Ranker = ranker
+	ranked := rank(job.QueryText(), cands)
+	done(nil)
+	job.Ranker = "seq"
 	job.Candidates = ranked
 	best := ranked[0]
 	if !autoMatch(cfg, ranked) {

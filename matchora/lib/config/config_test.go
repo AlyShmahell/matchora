@@ -9,27 +9,13 @@ import (
 	"time"
 )
 
-func TestLoadReadsPathAndPrompt(t *testing.T) {
-	dir := t.TempDir()
-	yamlPath := filepath.Join(dir, "default.yaml")
-	if err := os.WriteFile(yamlPath, []byte("data_dir: /tmp/matchora\nversion: \"9.9.9\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "prompt.md"), []byte("unique titles from prompt.md\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(yamlPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestLoadReadsPath(t *testing.T) {
+	cfg := loadOverlay(t, "version: \"9.9.9\"\n")
 	if cfg.Version != "9.9.9" {
 		t.Fatalf("version=%q", cfg.Version)
 	}
-	if cfg.ConfigPath != yamlPath {
-		t.Fatalf("config path=%q", cfg.ConfigPath)
-	}
-	if !strings.Contains(cfg.Prompt(), "prompt.md") {
-		t.Fatalf("prompt=%q", cfg.Prompt())
+	if cfg.ConfigPath == "" {
+		t.Fatal("config path empty")
 	}
 }
 
@@ -39,27 +25,8 @@ func TestLoadRequiresPath(t *testing.T) {
 	}
 }
 
-func TestPromptFallback(t *testing.T) {
-	cfg := Config{}
-	if !strings.Contains(cfg.Prompt(), "unique titles") {
-		t.Fatalf("fallback=%q", cfg.Prompt())
-	}
-}
-
-func TestLoadReadsIngestAndPrompt(t *testing.T) {
-	dir := t.TempDir()
-	yamlPath := filepath.Join(dir, "default.yaml")
-	raw := "data_dir: /tmp/matchora\ningest:\n  sample_rows: 2\n  aliases:\n    mediatype: type\n  types:\n    episode: tv\n"
-	if err := os.WriteFile(yamlPath, []byte(raw), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "ingest.md"), []byte("map CSV column headers from ingest.md\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(yamlPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestLoadReadsIngest(t *testing.T) {
+	cfg := loadOverlay(t, "ingest:\n  sample_rows: 2\n  aliases:\n    mediatype: type\n  types:\n    episode: tv\n")
 	if cfg.Ingest.SampleRows != 2 {
 		t.Fatalf("sample_rows=%d", cfg.Ingest.SampleRows)
 	}
@@ -69,31 +36,15 @@ func TestLoadReadsIngestAndPrompt(t *testing.T) {
 	if cfg.Ingest.Types["episode"] != "tv" {
 		t.Fatalf("types=%v", cfg.Ingest.Types)
 	}
-	if !strings.Contains(cfg.IngestPrompt(), "ingest.md") {
-		t.Fatalf("ingest prompt=%q", cfg.IngestPrompt())
-	}
-}
-
-func TestIngestPromptFallback(t *testing.T) {
-	cfg := Config{}
-	if !strings.Contains(cfg.IngestPrompt(), "columns") {
-		t.Fatalf("fallback=%q", cfg.IngestPrompt())
-	}
 }
 
 func TestIngestSampleRows(t *testing.T) {
-	if (Config{}).IngestSampleRows() != 3 {
-		t.Fatal("unset sample_rows should be 3")
-	}
 	if (Config{Ingest: Ingest{SampleRows: 5}}).IngestSampleRows() != 5 {
 		t.Fatal("sample_rows=5")
 	}
 }
 
 func TestMatchWorkers(t *testing.T) {
-	if (Config{}).MatchWorkers() != 1 {
-		t.Fatal("zero workers should be 1")
-	}
 	if (Config{Match: Match{Workers: 8}}).MatchWorkers() != 8 {
 		t.Fatal("workers=8")
 	}
@@ -109,50 +60,17 @@ func TestMatchSoloScore(t *testing.T) {
 }
 
 func TestMatchMinHits(t *testing.T) {
-	if (Config{}).MatchMinHits() != 1 {
-		t.Fatal("zero min_hits should be 1")
-	}
 	if (Config{Match: Match{MinHits: 3}}).MatchMinHits() != 3 {
 		t.Fatal("min_hits=3")
 	}
 }
 
-func TestMatchCooldownDefaults(t *testing.T) {
-	if (Config{}).MatchCooldownFails() != 2 {
-		t.Fatal("unset cooldown_fails should be 2")
-	}
-	if (Config{Match: Match{CooldownFails: -1}}).MatchCooldownFails() != 0 {
-		t.Fatal("negative cooldown_fails should disable")
+func TestMatchCooldownFails(t *testing.T) {
+	if (Config{Match: Match{CooldownFails: 0}}).MatchCooldownFails() != 0 {
+		t.Fatal("zero cooldown_fails should stay 0")
 	}
 	if (Config{Match: Match{CooldownFails: 4}}).MatchCooldownFails() != 4 {
 		t.Fatal("cooldown_fails=4")
-	}
-	got := (Config{}).MatchCooldown()
-	if got.MinExp != 16 || got.MaxExp != 19 {
-		t.Fatalf("unset cooldown=%+v want 16/19", got)
-	}
-	got = (Config{Match: Match{Cooldown: ExpRange{MinExp: 4, MaxExp: 7}}}).MatchCooldown()
-	if got.MinExp != 4 || got.MaxExp != 7 {
-		t.Fatalf("cooldown=%+v", got)
-	}
-}
-
-func TestClampExp(t *testing.T) {
-	got := ClampExp(ExpRange{}, 10, 13)
-	if got.MinExp != 10 || got.MaxExp != 13 {
-		t.Fatalf("defaults=%+v", got)
-	}
-	got = ClampExp(ExpRange{MinExp: 3, MaxExp: 4}, 10, 13)
-	if got.MinExp != 3 || got.MaxExp != 5 {
-		t.Fatalf("max < min+2: %+v", got)
-	}
-	got = ClampExp(ExpRange{MinExp: -2, MaxExp: 3}, 10, 13)
-	if got.MinExp != 0 || got.MaxExp != 3 {
-		t.Fatalf("neg min=%+v", got)
-	}
-	got = ClampExp(ExpRange{MinExp: 0, MaxExp: 2}, 10, 13)
-	if got.MinExp != 0 || got.MaxExp != 2 {
-		t.Fatalf("explicit zero min=%+v", got)
 	}
 }
 
@@ -170,20 +88,11 @@ func TestJitterExpBounds(t *testing.T) {
 }
 
 func TestLoadSecretAlias(t *testing.T) {
-	dir := t.TempDir()
-	data := filepath.Join(dir, "data")
-	if err := os.MkdirAll(data, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	path, data := writeMerged(t, "providers:\n  tmdb: {}\n  tmdb_tv:\n    secret: tmdb\n")
 	if err := os.WriteFile(filepath.Join(data, "secrets"), []byte("tmdb: abc123\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	yamlPath := filepath.Join(dir, "default.yaml")
-	raw := "data_dir: " + strconv.Quote(data) + "\nproviders:\n  tmdb: {}\n  tmdb_tv:\n    secret: tmdb\n"
-	if err := os.WriteFile(yamlPath, []byte(raw), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(yamlPath)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,20 +104,32 @@ func TestLoadSecretAlias(t *testing.T) {
 	}
 }
 
-func TestHTTPBackoffDefaults(t *testing.T) {
-	got := (Config{}).HTTPBackoff()
-	if got.MinExp != 10 || got.MaxExp != 13 {
-		t.Fatalf("unset backoff=%+v want 10/13", got)
+func TestLoadShareYAML(t *testing.T) {
+	cfg := loadOverlay(t, "")
+	if cfg.Version == "" {
+		t.Fatal("share version empty")
+	}
+	if _, ok := cfg.GroupVideoExt()[".mkv"]; !ok {
+		t.Fatal("share video ext")
+	}
+	if _, ok := cfg.GroupExtras()["extras"]; !ok {
+		t.Fatal("share extras")
+	}
+	if cfg.SeqThreshold() != 0.72 {
+		t.Fatalf("threshold=%v", cfg.SeqThreshold())
+	}
+}
+
+func TestLoadMissingExtras(t *testing.T) {
+	_, err := loadOverlayErr(t, "group:\n  extras: []\n")
+	if err == nil || !strings.Contains(err.Error(), "group.extras is empty") {
+		t.Fatalf("err=%v", err)
 	}
 }
 
 func TestLoadDefaultDataDirBesideBinary(t *testing.T) {
-	dir := t.TempDir()
-	yamlPath := filepath.Join(dir, "default.yaml")
-	if err := os.WriteFile(yamlPath, []byte("version: \"1\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(yamlPath)
+	path, _ := writeMerged(t, "data_dir: \"\"\n")
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,15 +150,7 @@ func TestLoadDefaultDataDirBesideBinary(t *testing.T) {
 }
 
 func TestLoadRelativeDataDir(t *testing.T) {
-	dir := t.TempDir()
-	yamlPath := filepath.Join(dir, "default.yaml")
-	if err := os.WriteFile(yamlPath, []byte("data_dir: rel-data\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(yamlPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadOverlay(t, "data_dir: rel-data\n")
 	root, err := ExeDir()
 	if err != nil {
 		t.Fatal(err)
@@ -248,67 +161,15 @@ func TestLoadRelativeDataDir(t *testing.T) {
 	}
 }
 
-func TestLlamaPathsBesideBinary(t *testing.T) {
-	cfg := Config{ExeDir: "/opt/matchora"}
-	if got := cfg.LlamaBinDir(); got != "/opt/matchora/vendor/llama.cpp" {
-		t.Fatalf("bin=%q", got)
-	}
-	if got := cfg.LlamaModelsDir(); got != "/opt/matchora/vendor/llama.cpp/models" {
-		t.Fatalf("models=%q", got)
-	}
-	cfg.Llama.BinDir = "custom/bin"
-	cfg.Llama.ModelsDir = "/abs/models"
-	if got := cfg.LlamaBinDir(); got != "/opt/matchora/custom/bin" {
-		t.Fatalf("custom bin=%q", got)
-	}
-	if got := cfg.LlamaModelsDir(); got != "/abs/models" {
-		t.Fatalf("abs models=%q", got)
-	}
-}
-
-func TestLocalInstructSameOrigin(t *testing.T) {
-	cfg := Config{Llama: Llama{
-		BaseURL:    "http://127.0.0.1:8080/v1",
-		LLMBaseURL: "http://127.0.0.1:8080/v1",
-	}}
-	if !cfg.LocalInstruct() {
-		t.Fatal("same origin should be local")
-	}
-	cfg.Llama.LLMBaseURL = ""
-	if !cfg.LocalInstruct() {
-		t.Fatal("empty llm_base_url should be local")
-	}
-	cfg.Llama.LLMBaseURL = "http://stub:8080/v1"
-	if cfg.LocalInstruct() {
-		t.Fatal("stub should not be local")
-	}
-}
-
-func TestEmbedInstructModelIDs(t *testing.T) {
-	cfg := Config{Llama: Llama{
-		EmbedFile:    "all-MiniLM-L6-v2-Q4_K_M.gguf",
-		InstructFile: "SmolLM2-135M-Instruct-Q8_0.gguf",
-	}}
-	if got := cfg.EmbedModel(); got != "all-MiniLM-L6-v2-Q4_K_M" {
-		t.Fatalf("embed=%q", got)
-	}
-	if got := cfg.InstructModel(); got != "SmolLM2-135M-Instruct-Q8_0" {
-		t.Fatalf("instruct=%q", got)
-	}
-	cfg.Llama.Embed = "minilm"
-	cfg.Llama.Instruct = "smol"
-	if got := cfg.EmbedModel(); got != "minilm" {
-		t.Fatalf("embed override=%q", got)
-	}
-	if got := cfg.InstructModel(); got != "smol" {
-		t.Fatalf("instruct override=%q", got)
+func TestSeqThresholdFromYAML(t *testing.T) {
+	cfg := loadOverlay(t, "group:\n  seq_threshold: 0.5\n")
+	if cfg.SeqThreshold() != 0.5 {
+		t.Fatalf("threshold=%v", cfg.SeqThreshold())
 	}
 }
 
 func TestLoadProviderOptionalFields(t *testing.T) {
-	dir := t.TempDir()
-	yamlPath := filepath.Join(dir, "default.yaml")
-	raw := "data_dir: " + strconv.Quote(dir) + `
+	cfg := loadOverlay(t, `
 providers:
   src:
     retries: 1
@@ -319,14 +180,7 @@ providers:
       url: "{base}"
       query: { i: "{id}" }
       fields: { synopsis: Plot }
-`
-	if err := os.WriteFile(yamlPath, []byte(raw), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(yamlPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+`)
 	p := cfg.Providers["src"]
 	if p.Retries != 1 || p.ProviderTimeoutMS != 4000 || p.NFO != "movie" || p.UniqueID != "tmdb" {
 		t.Fatalf("provider=%+v", p)
@@ -450,72 +304,22 @@ func TestSetSecretsCreatesMissingFile(t *testing.T) {
 	}
 }
 
-func TestApplyListenFromHostPort(t *testing.T) {
-	cfg := loadSecretsCfg(t, `
-llama:
-  host: "10.0.0.2"
-  port: 9090
-  base_url: "http://127.0.0.1:8080/v1"
-  llm_base_url: "http://stub:8080/v1"
-`)
-	if cfg.Llama.Host != "10.0.0.2" || cfg.Llama.Port != 9090 {
-		t.Fatalf("listen=%s:%d", cfg.Llama.Host, cfg.Llama.Port)
-	}
-	if cfg.Llama.BaseURL != "http://10.0.0.2:9090/v1" {
-		t.Fatalf("base=%q", cfg.Llama.BaseURL)
-	}
-	if cfg.Llama.LLMBaseURL != "http://stub:8080/v1" {
-		t.Fatalf("llm=%q", cfg.Llama.LLMBaseURL)
-	}
-}
-
-func TestApplyListenParsesBaseURL(t *testing.T) {
-	cfg := loadSecretsCfg(t, `
-llama:
-  base_url: "http://192.168.1.5:1234/v1"
-`)
-	if cfg.Llama.Host != "192.168.1.5" || cfg.Llama.Port != 1234 {
-		t.Fatalf("listen=%s:%d", cfg.Llama.Host, cfg.Llama.Port)
-	}
-	if cfg.Llama.BaseURL != "http://192.168.1.5:1234/v1" {
-		t.Fatalf("base=%q", cfg.Llama.BaseURL)
-	}
-}
-
-func TestApplyListenDefaults(t *testing.T) {
-	cfg := loadSecretsCfg(t, "version: \"1\"\n")
-	if cfg.Llama.Host != "127.0.0.1" || cfg.Llama.Port != 8080 {
-		t.Fatalf("listen=%s:%d", cfg.Llama.Host, cfg.Llama.Port)
-	}
-	if cfg.Llama.BaseURL != "http://127.0.0.1:8080/v1" {
-		t.Fatalf("base=%q", cfg.Llama.BaseURL)
-	}
-}
-
-func TestOverlayMergeAndPort(t *testing.T) {
+func TestOverlayMerge(t *testing.T) {
 	cfg := loadSecretsCfg(t, "match:\n  min_score: 0.5\n")
 	got, err := Overlay(&cfg, map[string]any{
 		"match": map[string]any{"min_score": 0.9},
-		"llama": map[string]any{"host": "127.0.0.1", "port": 8081},
+		"group": map[string]any{"seq_threshold": 0.8},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	llama, _ := got["llama"].(map[string]any)
-	if llama["host"] != "127.0.0.1" {
-		t.Fatalf("overlay llama=%v", llama)
-	}
-	switch p := llama["port"].(type) {
-	case int:
-		if p != 8081 {
-			t.Fatalf("port=%v", p)
-		}
-	default:
-		t.Fatalf("port type %T %v", p, p)
-	}
 	match, _ := got["match"].(map[string]any)
 	if match["min_score"] != 0.9 {
 		t.Fatalf("min_score=%v", match["min_score"])
+	}
+	group, _ := got["group"].(map[string]any)
+	if group["seq_threshold"] != 0.8 {
+		t.Fatalf("threshold=%v", group["seq_threshold"])
 	}
 	again, err := Overlay(&cfg, map[string]any{"match": map[string]any{"min_margin": 0.1}})
 	if err != nil {
@@ -525,44 +329,9 @@ func TestOverlayMergeAndPort(t *testing.T) {
 	if match["min_score"] != 0.9 || match["min_margin"] != 0.1 {
 		t.Fatalf("merged match=%v", match)
 	}
-	llama, _ = again["llama"].(map[string]any)
-	if llama["host"] != "127.0.0.1" {
-		t.Fatalf("llama dropped=%v", llama)
-	}
-}
-
-func TestOverlayRejectsBadPort(t *testing.T) {
-	cfg := loadSecretsCfg(t, "")
-	if _, err := Overlay(&cfg, map[string]any{"llama": map[string]any{"port": 0}}); err == nil {
-		t.Fatal("expected port error")
-	}
-	if _, err := Overlay(&cfg, map[string]any{"llama": map[string]any{"port": 70000}}); err == nil {
-		t.Fatal("expected range error")
-	}
-}
-
-func TestLoadAppliesOverlayListen(t *testing.T) {
-	cfg := loadSecretsCfg(t, `
-llama:
-  host: "127.0.0.1"
-  port: 8080
-  llm_base_url: "http://stub:8080/v1"
-`)
-	if _, err := Overlay(&cfg, map[string]any{"llama": map[string]any{"host": "10.1.2.3", "port": 9090}}); err != nil {
-		t.Fatal(err)
-	}
-	got, err := Load(cfg.ConfigPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Llama.Host != "10.1.2.3" || got.Llama.Port != 9090 {
-		t.Fatalf("listen=%s:%d", got.Llama.Host, got.Llama.Port)
-	}
-	if got.Llama.BaseURL != "http://10.1.2.3:9090/v1" {
-		t.Fatalf("base=%q", got.Llama.BaseURL)
-	}
-	if got.Llama.LLMBaseURL != "http://stub:8080/v1" {
-		t.Fatalf("llm=%q", got.Llama.LLMBaseURL)
+	group, _ = again["group"].(map[string]any)
+	if group["seq_threshold"] != 0.8 {
+		t.Fatalf("group dropped=%v", group)
 	}
 }
 
@@ -574,28 +343,6 @@ func TestReadOverlayEmpty(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("got=%v", got)
-	}
-}
-
-func TestInstructFollowsListen(t *testing.T) {
-	if !InstructFollowsListen("", "http://127.0.0.1:8080/v1") {
-		t.Fatal("empty llm should follow")
-	}
-	if !InstructFollowsListen("http://127.0.0.1:8080/v1", "http://127.0.0.1:8080/v1") {
-		t.Fatal("same origin should follow")
-	}
-	if InstructFollowsListen("http://stub:8080/v1", "http://127.0.0.1:8080/v1") {
-		t.Fatal("stub should not follow")
-	}
-}
-
-func TestLlamaProbeVendorURL(t *testing.T) {
-	cfg := Config{Llama: Llama{Host: "10.0.0.2", Port: 9090}}
-	if got := cfg.LlamaProbeURL(); got != "http://10.0.0.2:9090/v1" {
-		t.Fatalf("probe=%q", got)
-	}
-	if got := cfg.LlamaVendorURL(); got != "http://127.0.0.1:9090/v1" {
-		t.Fatalf("vendor=%q", got)
 	}
 }
 
@@ -615,21 +362,60 @@ func TestSessionTTLClamp(t *testing.T) {
 	}
 }
 
-func loadSecretsCfg(t *testing.T, body string) Config {
+func TestOverlayRejectsEmptyExtras(t *testing.T) {
+	cfg := loadOverlay(t, "")
+	_, err := Overlay(&cfg, map[string]any{"group": map[string]any{"extras": []any{}}})
+	if err == nil || !strings.Contains(err.Error(), "group.extras is empty") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func shareYAML(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", "share", "config", "default.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func writeMerged(t *testing.T, extra string) (path, data string) {
 	t.Helper()
 	dir := t.TempDir()
-	data := filepath.Join(dir, "data")
+	data = filepath.Join(dir, "data")
 	if err := os.MkdirAll(data, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	yamlPath := filepath.Join(dir, "default.yaml")
-	raw := "data_dir: " + strconv.Quote(data) + "\n" + body
-	if err := os.WriteFile(yamlPath, []byte(raw), 0o644); err != nil {
+	over := extra
+	if !strings.Contains(over, "data_dir:") {
+		over = "data_dir: " + strconv.Quote(data) + "\n" + extra
+	}
+	merged, err := merge(shareYAML(t), []byte(over))
+	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(yamlPath)
+	path = filepath.Join(dir, "default.yaml")
+	if err := os.WriteFile(path, merged, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path, data
+}
+
+func loadOverlay(t *testing.T, extra string) Config {
+	t.Helper()
+	cfg, err := loadOverlayErr(t, extra)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func loadOverlayErr(t *testing.T, extra string) (Config, error) {
+	t.Helper()
+	path, _ := writeMerged(t, extra)
+	return Load(path)
+}
+
+func loadSecretsCfg(t *testing.T, body string) Config {
+	return loadOverlay(t, body)
 }
