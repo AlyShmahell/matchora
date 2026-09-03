@@ -23,8 +23,6 @@ var (
 	whitespace = regexp.MustCompile(`\s+`)
 )
 
-const synopsisLimit = 400
-
 func searchProviders(ctx context.Context, cfg config.Config, httpc *httpClient, job Job) ([]Candidate, error) {
 	return searchProvidersDefer(ctx, cfg, httpc, job, false)
 }
@@ -91,7 +89,7 @@ func collectProviders(ctx context.Context, cfg config.Config, httpc *httpClient,
 				errs = append(errs, name+": "+err.Error())
 				return
 			}
-			cs, err := searchProvider(ctx, httpc, name, spec, job)
+			cs, err := searchProvider(ctx, httpc, name, spec, job, cfg.SynopsisLimit(), cfg.PlotStop())
 			done(err)
 			mu.Lock()
 			defer mu.Unlock()
@@ -123,7 +121,7 @@ func providerWanted(spec config.Provider, jobType string) bool {
 	return false
 }
 
-func searchProvider(ctx context.Context, httpc *httpClient, name string, spec config.Provider, job Job) ([]Candidate, error) {
+func searchProvider(ctx context.Context, httpc *httpClient, name string, spec config.Provider, job Job, limit int, stop map[string]struct{}) ([]Candidate, error) {
 	raw, err := providerGET(ctx, httpc.forSpec(spec), spec.URL, spec.Query, varsFor(spec, job, ""), func(ctx context.Context) error {
 		return paceProvider(ctx, name, spec.MinIntervalMS)
 	})
@@ -136,12 +134,84 @@ func searchProvider(ctx context.Context, httpc *httpClient, name string, spec co
 	}
 	out := make([]Candidate, 0, len(items))
 	for _, item := range items {
-		c, ok := candidateFrom(name, spec, item)
+		c, ok := candidateFrom(name, spec, item, limit)
 		if ok {
 			out = append(out, c)
 		}
 	}
+	hydrateTitles(ctx, httpc, name, spec, job, out, stop)
 	return out, nil
+}
+
+func titlesMax(spec config.Provider) int {
+	if spec.Titles != nil && spec.Titles.Max > 0 {
+		return spec.Titles.Max
+	}
+	return 3
+}
+
+func hydrateTitles(ctx context.Context, httpc *httpClient, name string, spec config.Provider, job Job, cands []Candidate, stop map[string]struct{}) {
+	if spec.Titles == nil || strings.TrimSpace(spec.Titles.URL) == "" || len(cands) == 0 {
+		return
+	}
+	jobContent := contentSet(job.Title, stop)
+	n := 0
+	max := titlesMax(spec)
+	for i := range cands {
+		if n >= max {
+			return
+		}
+		if coverage(jobContent, contentSet(cands[i].Title, stop)) >= 1 {
+			continue
+		}
+		n++
+		_ = fetchTitleAkas(ctx, httpc, name, spec, job, &cands[i], jobContent, stop)
+	}
+}
+
+func fetchTitleAkas(ctx context.Context, httpc *httpClient, name string, spec config.Provider, job Job, cand *Candidate, jobContent map[string]struct{}, stop map[string]struct{}) error {
+	tl := spec.Titles
+	done := waitStart(ctx, job, name+"/titles")
+	raw, err := providerGET(ctx, httpc.forSpec(spec), tl.URL, tl.Query, varsFor(spec, job, cand.ID), func(ctx context.Context) error {
+		return paceProvider(ctx, name, spec.MinIntervalMS)
+	})
+	if err != nil {
+		done(err)
+		return err
+	}
+	items, err := extractItems(raw, tl.Items)
+	if err != nil {
+		done(err)
+		return err
+	}
+	path := tl.Fields["title"]
+	if path == "" {
+		path = "name"
+	}
+	var kept []string
+	for _, item := range items {
+		s := strings.TrimSpace(asString(dig(item, path)))
+		if s == "" || !sharesContent(jobContent, contentSet(s, stop)) {
+			continue
+		}
+		kept = append(kept, s)
+	}
+	if len(kept) == 0 {
+		done(nil)
+		return nil
+	}
+	if cand.Attrs == nil {
+		cand.Attrs = map[string]string{}
+	}
+	for i, s := range kept {
+		key := "title_aka"
+		if i > 0 {
+			key = "title_aka_" + strconv.Itoa(i+1)
+		}
+		cand.Attrs[key] = s
+	}
+	done(nil)
+	return nil
 }
 
 func fetchEpisode(ctx context.Context, cfg config.Config, httpc *httpClient, job Job, cand Candidate) *Candidate {
@@ -171,7 +241,7 @@ func fetchEpisode(ctx context.Context, cfg config.Config, httpc *httpClient, job
 		Year:         spec.Episode.Year,
 		URLPrefix:    spec.URLPrefix,
 		PosterPrefix: spec.PosterPrefix,
-	}, obj)
+	}, obj, cfg.SynopsisLimit())
 	if !ok {
 		done(nil)
 		return nil
@@ -205,16 +275,16 @@ func fetchDetail(ctx context.Context, cfg config.Config, httpc *httpClient, job 
 		done(err)
 		return
 	}
-	mergeDetail(cand, spec.Detail, obj)
+	mergeDetail(cand, spec.Detail, obj, cfg.SynopsisLimit())
 	done(nil)
 }
 
-func mergeDetail(cand *Candidate, ep *config.Episode, item any) {
+func mergeDetail(cand *Candidate, ep *config.Episode, item any, limit int) {
 	if cand == nil || ep == nil || ep.Fields == nil {
 		return
 	}
 	if p := ep.Fields["synopsis"]; p != "" && cand.Synopsis == "" {
-		cand.Synopsis = clipText(stripHTML(asString(dig(item, p))), synopsisLimit)
+		cand.Synopsis = clipText(stripHTML(asString(dig(item, p))), limit)
 	}
 	if p := ep.Fields["title"]; p != "" && cand.Title == "" {
 		cand.Title = asString(dig(item, p))
@@ -298,7 +368,7 @@ func extractItems(raw []byte, path string) ([]any, error) {
 	}
 }
 
-func candidateFrom(name string, spec config.Provider, item any) (Candidate, bool) {
+func candidateFrom(name string, spec config.Provider, item any, limit int) (Candidate, bool) {
 	id := asString(dig(item, spec.Fields["id"]))
 	title := asString(dig(item, spec.Fields["title"]))
 	if id == "" || title == "" {
@@ -314,7 +384,7 @@ func candidateFrom(name string, spec config.Provider, item any) (Candidate, bool
 	}
 	synopsis := ""
 	if p := spec.Fields["synopsis"]; p != "" {
-		synopsis = clipText(stripHTML(asString(dig(item, p))), synopsisLimit)
+		synopsis = clipText(stripHTML(asString(dig(item, p))), limit)
 	}
 	poster := ""
 	if p := spec.Fields["poster"]; p != "" {
@@ -331,8 +401,29 @@ func candidateFrom(name string, spec config.Provider, item any) (Candidate, bool
 		URL:      href,
 		Synopsis: synopsis,
 		Poster:   poster,
-		Attrs:    extraAttrs(spec.Fields, item),
+		Attrs:    mergeAttrs(extraAttrs(spec.Fields, item), spec.Attrs),
 	}, true
+}
+
+func mergeAttrs(extracted, static map[string]string) map[string]string {
+	if len(static) == 0 {
+		return extracted
+	}
+	out := extracted
+	if out == nil {
+		out = map[string]string{}
+	}
+	for k, v := range static {
+		v = strings.TrimSpace(v)
+		if v == "" || strings.TrimSpace(out[k]) != "" {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 var coreFields = map[string]bool{

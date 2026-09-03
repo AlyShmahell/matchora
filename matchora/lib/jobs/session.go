@@ -57,7 +57,7 @@ func SessionExpired(id string, now time.Time, ttl time.Duration) bool {
 		return true
 	}
 	if ttl <= 0 {
-		ttl = config.SessionTTLMax
+		return false
 	}
 	return now.UTC().After(created.Add(ttl))
 }

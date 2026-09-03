@@ -1,6 +1,6 @@
 # Architecture
 
-Matchora ingests title rows or scans a library path, searches metadata APIs defined in YAML, and ranks candidates with SequenceMatcher. Matching behavior is in [design/match.md](design/match.md). The admin console is in [design/gui.md](design/gui.md).
+Matchora ingests title rows or scans a library path, searches metadata APIs defined in YAML, and ranks candidates with token-set Jaccard plus a residual plot score (SequenceMatcher is for disk grouping only). Matching behavior is in [design/match.md](design/match.md). The admin console is in [design/gui.md](design/gui.md).
 
 ## Layout
 
@@ -51,4 +51,4 @@ Dist is binary + `config/` + `public/` only. The packager’s tarball is that tr
 
 Other runtime YAML lives in `{data_dir}/config.yaml`, merged on `Load` the same way as `/run/matchora/config.yaml`. `GET`/`POST /v1/config` read and deep-merge that overlay (same shape as `default.yaml`). After a successful secrets or config POST the process writes the JSON body and `exec`s itself so the next `Load` applies the files.
 
-Each `POST /v1/scan` or `/v1/ingest` mints a session id (`<UTC datetime>-<16 hex chars>`, e.g. `20260829T122800Z-a1b2c3d4e5f6g7h8`) and writes `{data_dir}/jobs-{session}.json`. `session.ttl_ms` (default and max 86400000) expires that file from the datetime in the id. Reads that need jobs or a filtered catalog take `?session=`. Matched titles are written under `{data_dir}/catalog` as `[uniqueid-id] Title (Year)/` with `.nfo` files and posters. `GET /v1/catalog?session=` returns only titles that session matched. Poster files are at `/v1/catalog/{provider}/{id}/poster.jpg?session=` (and season/episode variants). Deleting a session’s jobs file does not delete the catalog tree; `DELETE /v1/catalog` and `DELETE /v1/catalog/{provider}/{id}` do, and return `409` while any unexpired session still matches the target.
+Each `POST /v1/scan` or `/v1/ingest` mints a session id (`<UTC datetime>-<16 hex chars>`, e.g. `20260829T122800Z-a1b2c3d4e5f6g7h8`) and writes `{data_dir}/jobs-{session}.json`. `session.ttl_ms` (clamped to `session.ttl_max_ms`, shipped 86400000) expires that file from the datetime in the id. Reads that need jobs or a filtered catalog take `?session=`. Matched titles are written under `{data_dir}/catalog` as `[uniqueid-id] Title (Year)/` with `.nfo` files and posters. `GET /v1/catalog?session=` returns only titles that session matched. Poster files are at `/v1/catalog/{provider}/{id}/poster.jpg?session=` (and season/episode variants). Deleting a session’s jobs file does not delete the catalog tree; `DELETE /v1/catalog` and `DELETE /v1/catalog/{provider}/{id}` do, and return `409` while any unexpired session still matches the target.

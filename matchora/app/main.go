@@ -172,7 +172,7 @@ func main() {
 			target = cfg.BrowseRoot
 		}
 		target = filepath.Clean(target)
-		children, err := scan.Children(cfg.BrowseRoot, target)
+		children, err := scan.Children(cfg.BrowseRoot, target, cfg.SampleVideos())
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -669,6 +669,7 @@ func jobsFromShows(shows []match.Grouped, root string, child scan.Child) []match
 	created := jobs.FromRows(rows, "scan")
 	for i := range created {
 		created[i].Path = resolveShowPath(root, child.Path, shows[i].Path)
+		created[i].Parent = shows[i].Parent
 	}
 	return created
 }

@@ -15,7 +15,7 @@ func fetchCatalog(ctx context.Context, cfg config.Config, httpc *httpClient, job
 		return nil, ""
 	}
 	forKey := cand.Key()
-	seasons, err := loadCatalog(ctx, httpc, cand.Provider, spec, job, cand.ID)
+	seasons, err := loadCatalog(ctx, httpc, cand.Provider, spec, job, cand.ID, cfg.SynopsisLimit())
 	if err != nil || seasons == nil {
 		return []CatalogSeason{}, forKey
 	}
@@ -134,7 +134,7 @@ func catalogNumKey(s string) string {
 	return strconv.Itoa(n)
 }
 
-func loadCatalog(ctx context.Context, httpc *httpClient, name string, spec config.Provider, job Job, showID string) ([]CatalogSeason, error) {
+func loadCatalog(ctx context.Context, httpc *httpClient, name string, spec config.Provider, job Job, showID string, limit int) ([]CatalogSeason, error) {
 	cat := spec.Catalog
 	seasons := make([]CatalogSeason, 0)
 	if cat.Seasons != nil && cat.Seasons.URL != "" {
@@ -143,7 +143,7 @@ func loadCatalog(ctx context.Context, httpc *httpClient, name string, spec confi
 			return nil, err
 		}
 		for _, item := range items {
-			s, ok := seasonFrom(spec, cat.Seasons, item)
+			s, ok := seasonFrom(spec, cat.Seasons, item, limit)
 			if ok {
 				seasons = append(seasons, s)
 			}
@@ -168,7 +168,7 @@ func loadCatalog(ctx context.Context, httpc *httpClient, name string, spec confi
 				}
 				continue
 			}
-			seasons[i].Episodes = episodesFrom(spec, cat.Episodes, items)
+			seasons[i].Episodes = episodesFrom(spec, cat.Episodes, items, limit)
 		}
 		return seasons, nil
 	}
@@ -178,7 +178,7 @@ func loadCatalog(ctx context.Context, httpc *httpClient, name string, spec confi
 	}
 	grouped := map[string][]CatalogEpisode{}
 	for _, item := range items {
-		ep, ok := episodeFrom(spec, cat.Episodes, item)
+		ep, ok := episodeFrom(spec, cat.Episodes, item, limit)
 		if !ok {
 			continue
 		}
@@ -214,8 +214,8 @@ func perSeasonURL(u string) bool {
 	return strings.Contains(u, "{season}") || strings.Contains(u, "{season_id}")
 }
 
-func seasonFrom(spec config.Provider, list *config.CatalogList, item any) (CatalogSeason, bool) {
-	id, number, title, synopsis, poster, href, year, _ := catalogFields(spec, list, item, "Season ")
+func seasonFrom(spec config.Provider, list *config.CatalogList, item any, limit int) (CatalogSeason, bool) {
+	id, number, title, synopsis, poster, href, year, _ := catalogFields(spec, list, item, "Season ", limit)
 	if title == "" {
 		return CatalogSeason{}, false
 	}
@@ -230,8 +230,8 @@ func seasonFrom(spec config.Provider, list *config.CatalogList, item any) (Catal
 	}, true
 }
 
-func episodeFrom(spec config.Provider, list *config.CatalogList, item any) (CatalogEpisode, bool) {
-	id, number, title, synopsis, poster, href, year, _ := catalogFields(spec, list, item, "Episode ")
+func episodeFrom(spec config.Provider, list *config.CatalogList, item any, limit int) (CatalogEpisode, bool) {
+	id, number, title, synopsis, poster, href, year, _ := catalogFields(spec, list, item, "Episode ", limit)
 	if title == "" {
 		return CatalogEpisode{}, false
 	}
@@ -246,10 +246,10 @@ func episodeFrom(spec config.Provider, list *config.CatalogList, item any) (Cata
 	}, true
 }
 
-func episodesFrom(spec config.Provider, list *config.CatalogList, items []any) []CatalogEpisode {
+func episodesFrom(spec config.Provider, list *config.CatalogList, items []any, limit int) []CatalogEpisode {
 	out := make([]CatalogEpisode, 0, len(items))
 	for _, item := range items {
-		ep, ok := episodeFrom(spec, list, item)
+		ep, ok := episodeFrom(spec, list, item, limit)
 		if ok {
 			out = append(out, ep)
 		}
@@ -258,7 +258,7 @@ func episodesFrom(spec config.Provider, list *config.CatalogList, items []any) [
 	return out
 }
 
-func catalogFields(spec config.Provider, list *config.CatalogList, item any, emptyPrefix string) (id, number, title, synopsis, poster, href, year, season string) {
+func catalogFields(spec config.Provider, list *config.CatalogList, item any, emptyPrefix string, limit int) (id, number, title, synopsis, poster, href, year, season string) {
 	fields := list.Fields
 	id = asString(dig(item, fields["id"]))
 	number = asString(dig(item, fields["number"]))
@@ -270,7 +270,7 @@ func catalogFields(spec config.Provider, list *config.CatalogList, item any, emp
 		id = number
 	}
 	if p := fields["synopsis"]; p != "" {
-		synopsis = clipText(stripHTML(asString(dig(item, p))), synopsisLimit)
+		synopsis = clipText(stripHTML(asString(dig(item, p))), limit)
 	}
 	if p := fields["poster"]; p != "" {
 		poster = asString(dig(item, p))

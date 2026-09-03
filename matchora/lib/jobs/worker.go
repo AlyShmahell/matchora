@@ -21,7 +21,7 @@ type Worker struct {
 }
 
 func NewWorker(cfg *config.Config, store *Store) *Worker {
-	return &Worker{cfg: cfg, store: store, waits: &match.WaitLog{}, cool: match.NewCircuit()}
+	return &Worker{cfg: cfg, store: store, waits: match.NewWaitLog(cfg.WaitCap()), cool: match.NewCircuit()}
 }
 
 func (w *Worker) Waits() []match.Wait {

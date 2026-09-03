@@ -6,7 +6,7 @@ Shipped defaults:
 
 | Provider | Auth | Search |
 |----------|------|--------|
-| [TVMaze](https://www.tvmaze.com/api) | none | `GET /search/shows?q=` — Episode: `/shows/{id}/episodebynumber?season=&number=` — Catalog: `/shows/{id}/seasons` plus `/shows/{id}/episodes` grouped by season |
+| [TVMaze](https://www.tvmaze.com/api) | none | `GET /search/shows?q=` — Titles: `/shows/{id}/akas` (`max: 3`) — Episode: `/shows/{id}/episodebynumber?season=&number=` — Catalog: `/shows/{id}/seasons` plus `/shows/{id}/episodes` grouped by season |
 | [Jikan v4](https://docs.api.jikan.moe/) | none | `GET /anime?q=` — `limit: 25`, `min_interval_ms: 1100`, `retries: 1`, `provider_timeout_ms: 4000`, `defer: true` |
 | OMDb | `{data_dir}/secrets` key `omdb` (or `POST /v1/secrets`) | `?s=` + `type=movie` — movies only; skipped when `api_key` is empty (`require: api_key`) |
 | [TMDB](https://developer.themoviedb.org/docs/search-and-query-for-details) movie | `{data_dir}/secrets` key `tmdb` (or `POST /v1/secrets`) | `GET /3/search/movie` — `defer: true`; skipped when `api_key` is empty |
@@ -22,7 +22,7 @@ GET retries, per-attempt timeout (`provider_timeout_ms`), and **capped exponenti
 
 A provider that **errors after retries** on `match.cooldown_fails` jobs in a row (default 2 if unset; shipped YAML is 5) is skipped for a jittered cooldown from `match.cooldown.min_exp` / `max_exp` (default 16/19: first skip ~1–2 min, cap ~4.4–8.7 min). Each cooldown start bumps the exponent; a later success resets streak and exponent. Empty 200s do not count. A dead parent context (batch leftover or cancel) is not a failure; a per-attempt timeout while the job context is still alive is. The cooldown list lives on the worker for the process lifetime.
 
-After rank, auto-`matched` only if `score >= match.min_score` and the gap to second is `>= match.min_margin` (or a single candidate). Otherwise `status: manual`; the user picks via `POST /v1/jobs/{id}/select`. Zero hits stay `unmatched`.
+After rank, auto-`matched` follows the set-ranker rules below (`min_score`, prefer + `queryCov`, `solo_min_score` only after prefer). Otherwise `status: manual`; the user picks via `POST /v1/jobs/{id}/select`. Zero hits stay `unmatched`.
 
 An optional YAML `catalog` block on a provider lists seasons and episodes with the same GET + JSON-path walker (`url`, `query`, `items`, `fields`, `year`, `poster_prefix`). Vars include `{id}`, `{season}`, `{season_id}`. If `episodes.url` contains `{season}` or `{season_id}`, the engine GETs once per season; otherwise one episodes dump is grouped by `fields.season`. Auto-match and `select` fetch the catalog for the chosen title. `POST /v1/jobs/{id}/catalog` `{provider,id}` loads it for any candidate on the job without changing `match` or `status`. `catalog: null` means not loaded; `[]` means loaded nothing. After pending work, the worker backfills `matched` jobs whose match provider has a catalog block and `catalog` is still null. `POST /v1/match` and retry clear catalog fields. Movies and providers without the block skip.
 
@@ -34,13 +34,38 @@ Stdlib HTTP. User-Agent `matchora/{version}`.
 
 ## Ranking
 
-SequenceMatcher ratio of the job title against each candidate title (plus year). Exact normalized titles score `1.0`. Synopsis is not used. Matching year adds `0.15`. Jobs record `ranker: seq`.
+The grouper still clusters disk names with SequenceMatcher. Candidate ranking is a **set** score: Jaccard of token sets after the same `titleNorm` used for grouping (lowercase, strip non-alnum). No stemming.
+
+- Query set for Jaccard = job **title** tokens only. Parent is not in `J`.
+- Jaccard `J` is the best `|q ∩ t| / |q ∪ t|` over the primary title and each extra attr whose key starts with `title` (Jikan `title_en`, TVMaze `title_aka` / `title_aka_2`, …), scored as its own token set so an exact alias is `1`.
+- Candidate set (for `queryCov`, `parentCov`, and content overlap) = union of those same title strings.
+- **Content tokens** = `titleNorm` fields after `match.plot_stop` and length &lt; 3 (same filter as plot).
+- Plot `func` is length-weighted coverage of content tokens from the job **title** (not parent) in the synopsis. A token that appears in two or more synopses in this result list is down-weighted (`0.25`). Empty synopsis → `0`.
+- `parentCov` = coverage of content tokens from a different parent folder in the candidate set (0 if no parent).
+- Displayed `Score` = `J + (1 − J) · max(func, parentCov)`. When `J = 1`, Score is `1`.
+- Sort: content-token overlap with the job title beats none; then higher Score; then job title tokens as a prefix of the candidate **primary** title; then higher Jaccard; then year match when the job has a year.
+- A provider `titles` block (TVMaze: `/shows/{id}/akas`, `max: 3`) may fetch aliases after search. Failed GETs are ignored. Candidates whose primary title already covers every content token of the job skip the extra GET. Only aliases that share a content token with the job are stored as `title_aka` / `title_aka_2` / ….
+- Search, detail, and catalog synopses are clipped at `match.synopsis_limit` (shipped 4000 runes).
+- `queryCov` = share of **title** tokens (not parent) found in the candidate set. Used only for auto-match after prefer.
+
+Jobs record `ranker: set`.
+
+`match.prefer.anime` (`language: Japanese`, `kind: Animation`) runs before rank. Typed `anime` jobs use it as before. Untyped scan jobs use the same filter when any candidate matches; if none match, all candidates stay. Jikan ships static `attrs: { language: Japanese, kind: Animation }` so prefer can fire on those hits.
+
+Auto-`matched` if:
+
+1. best **Jaccard** `>= match.min_score` and the Jaccard gap to second is `>= match.min_margin`, or
+2. prefer actually filtered, and either a single remaining candidate’s `Score` meets `solo_min_score` (plot can lift a Japanese-only title), or `queryCov == 1` with the usual margin on `Score`.
+
+A weak solo hit does **not** use `solo_min_score` unless prefer filtered. That stops a lone near-miss from auto-matching before deferred providers run.
+
+`defer: true` providers still run only if the fast pass is thin: fewer than `match.min_hits` or best **Jaccard** below `match.min_score`. A prefer-filtered auto-match on the fast pass skips defer. Fuzzy TVMaze near-misses that prefer did not keep stay `manual` and continue to Jikan.
 
 Grouped and ingested jobs share `runOne`.
 
 ## Ingest
 
-`POST /v1/ingest` accepts `multipart/form-data` field `file` or a raw body. `202` returns `{"session","jobs"}` with created rows as `pending`; the worker matches them. Missing `title` or an empty payload is `400`. Jobs persist at `{data_dir}/jobs-{session}.json` until `session.ttl_ms` (max one day) or `DELETE /v1/jobs?session=`.
+`POST /v1/ingest` accepts `multipart/form-data` field `file` or a raw body. `202` returns `{"session","jobs"}` with created rows as `pending`; the worker matches them. Missing `title` or an empty payload is `400`. Jobs persist at `{data_dir}/jobs-{session}.json` until `session.ttl_ms` (clamped to `session.ttl_max_ms`) or `DELETE /v1/jobs?session=`.
 
 - **CSV** with a header. Canonical fields: `title` (required), `year`, `type`, `season`, `episode`, `imdb`.
 - **JSON** array of the same fields.

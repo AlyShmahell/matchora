@@ -10,7 +10,8 @@ type Cleaned struct {
 
 type Grouped struct {
 	Cleaned
-	Path string
+	Path   string
+	Parent string
 }
 
 type Candidate struct {
@@ -23,6 +24,8 @@ type Candidate struct {
 	Synopsis string            `json:"synopsis,omitempty"`
 	Poster   string            `json:"poster,omitempty"`
 	Attrs    map[string]string `json:"attrs,omitempty"`
+	QueryCov float64           `json:"-"`
+	Jaccard  float64           `json:"-"`
 }
 
 func (c Candidate) Key() string {
@@ -63,6 +66,7 @@ type Job struct {
 	Source     string          `json:"source"`
 	Title      string          `json:"title"`
 	Year       string          `json:"year,omitempty"`
+	Parent     string          `json:"parent,omitempty"`
 	Type       string          `json:"type,omitempty"`
 	Season     string          `json:"season,omitempty"`
 	Episode    string          `json:"episode,omitempty"`

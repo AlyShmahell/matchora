@@ -1,6 +1,6 @@
 # Matchora
 
-Matchora scans a video library or ingests a list of titles, searches metadata APIs, and writes an NFO catalog. Candidates are ranked with SequenceMatcher. The browser UI is an admin console.
+Matchora scans a video library or ingests a list of titles, searches metadata APIs, and writes an NFO catalog. Candidates are ranked with token-set Jaccard plus a residual plot score. The browser UI is an admin console.
 
 Shipped providers: [TVMaze](https://www.tvmaze.com/api) and [Jikan](https://docs.api.jikan.moe/) (no key). [OMDb](https://www.omdbapi.com/) and [TMDB](https://developer.themoviedb.org/) are optional and need API keys.
 

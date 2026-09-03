@@ -127,8 +127,8 @@ func TestInvalidSessionRejected(t *testing.T) {
 }
 
 func TestSessionTTLClampAndExpire(t *testing.T) {
-	cfg := config.Config{Session: config.Session{TTLMS: 200000000}}
-	if cfg.SessionTTL() != config.SessionTTLMax {
+	cfg := config.Config{Session: config.Session{TTLMS: 200000000, TTLMaxMS: 86400000}}
+	if cfg.SessionTTL() != 24*time.Hour {
 		t.Fatalf("ttl=%s", cfg.SessionTTL())
 	}
 	store := New(t.TempDir())

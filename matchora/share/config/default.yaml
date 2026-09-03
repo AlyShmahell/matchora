@@ -6,9 +6,12 @@ http:
     min_exp: 10
     max_exp: 13
   provider_timeout_ms: 10000
-version: "0.0.4"
+version: "0.0.5"
 session:
   ttl_ms: 86400000
+  ttl_max_ms: 86400000
+scan:
+  sample_videos: 5
 match:
   min_score: 0.72
   solo_min_score: 0.01
@@ -23,6 +26,9 @@ match:
     anime:
       language: Japanese
       kind: Animation
+  plot_stop: [a, an, the, of, to, in, on, at, is, and, or, my, i, this, that, for, with, from, as, by]
+  wait_cap: 500
+  synopsis_limit: 4000
 group:
   seq_threshold: 0.72
   video_ext: [mkv, mp4, avi, m4v, ts, m2ts]
@@ -117,6 +123,11 @@ providers:
     items: "$"
     fields: { id: show.id, title: show.name, year: show.premiered, url: show.url, synopsis: show.summary, poster: show.image.medium, kind: show.type, language: show.language }
     year: prefix4
+    titles:
+      url: "{base}/shows/{id}/akas"
+      items: "$"
+      fields: { title: name }
+      max: 3
     episode:
       url: "{base}/shows/{id}/episodebynumber"
       query: { season: "{season}", number: "{episode}" }
@@ -140,7 +151,8 @@ providers:
     url: "{base}/anime"
     query: { q: "{title}", limit: "25", sfw: "false", order_by: "popularity", sort: "asc" }
     items: data
-    fields: { id: mal_id, title: title, year: aired.from, url: url, synopsis: synopsis, poster: images.jpg.image_url }
+    fields: { id: mal_id, title: title, year: aired.from, url: url, synopsis: synopsis, poster: images.jpg.image_url, title_en: title_english, title_jp: title_japanese }
+    attrs: { language: Japanese, kind: Animation }
     year: prefix4
     min_interval_ms: 1100
     retries: 1

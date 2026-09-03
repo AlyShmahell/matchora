@@ -84,6 +84,11 @@ func TestGroupNamedSiblings(t *testing.T) {
 	} else if path == "KonoSuba" {
 		t.Fatalf("movie path collapsed to parent: %q", path)
 	}
+	for _, g := range got {
+		if g.Parent != "KonoSuba" {
+			t.Fatalf("parent=%q title=%q", g.Parent, g.Title)
+		}
+	}
 }
 
 func TestGroupSkipsExtras(t *testing.T) {

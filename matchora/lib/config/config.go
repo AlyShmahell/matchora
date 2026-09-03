@@ -23,6 +23,7 @@ type Config struct {
 	Session    Session             `yaml:"session"`
 	Group      Group               `yaml:"group"`
 	Ingest     Ingest              `yaml:"ingest"`
+	Scan       Scan                `yaml:"scan"`
 	Providers  map[string]Provider `yaml:"providers"`
 	ConfigPath string              `yaml:"-"`
 	ExeDir     string              `yaml:"-"`
@@ -50,19 +51,30 @@ type HTTP struct {
 	ProviderTimeoutMS int      `yaml:"provider_timeout_ms"`
 }
 
-const SessionTTLMax = 24 * time.Hour
+type Scan struct {
+	SampleVideos int `yaml:"sample_videos"`
+}
 
 type Session struct {
-	TTLMS int `yaml:"ttl_ms"`
+	TTLMS    int `yaml:"ttl_ms"`
+	TTLMaxMS int `yaml:"ttl_max_ms"`
+}
+
+func (c Config) SessionTTLMax() time.Duration {
+	if c.Session.TTLMaxMS <= 0 {
+		return 0
+	}
+	return time.Duration(c.Session.TTLMaxMS) * time.Millisecond
 }
 
 func (c Config) SessionTTL() time.Duration {
+	max := c.SessionTTLMax()
 	if c.Session.TTLMS <= 0 {
-		return SessionTTLMax
+		return max
 	}
 	d := time.Duration(c.Session.TTLMS) * time.Millisecond
-	if d > SessionTTLMax {
-		return SessionTTLMax
+	if max > 0 && d > max {
+		return max
 	}
 	return d
 }
@@ -76,6 +88,9 @@ type Match struct {
 	CooldownFails int                          `yaml:"cooldown_fails"`
 	Cooldown      ExpRange                     `yaml:"cooldown"`
 	Prefer        map[string]map[string]string `yaml:"prefer"`
+	PlotStop      []string                     `yaml:"plot_stop"`
+	WaitCap       int                          `yaml:"wait_cap"`
+	SynopsisLimit int                          `yaml:"synopsis_limit"`
 }
 
 type ExpRange struct {
@@ -106,6 +121,8 @@ type Provider struct {
 	Episode           *Episode          `yaml:"episode"`
 	Detail            *Episode          `yaml:"detail"`
 	Catalog           *Catalog          `yaml:"catalog"`
+	Titles            *Titles           `yaml:"titles"`
+	Attrs             map[string]string `yaml:"attrs"`
 }
 
 type Episode struct {
@@ -127,6 +144,14 @@ type CatalogList struct {
 	Fields       map[string]string `yaml:"fields"`
 	Year         string            `yaml:"year"`
 	PosterPrefix string            `yaml:"poster_prefix"`
+}
+
+type Titles struct {
+	URL    string            `yaml:"url"`
+	Query  map[string]string `yaml:"query"`
+	Items  string            `yaml:"items"`
+	Fields map[string]string `yaml:"fields"`
+	Max    int               `yaml:"max"`
 }
 
 func ExeDir() (string, error) {
@@ -226,6 +251,18 @@ func Validate(c Config) error {
 	if c.Session.TTLMS <= 0 {
 		return fmt.Errorf("session.ttl_ms must be > 0")
 	}
+	if c.Session.TTLMaxMS <= 0 {
+		return fmt.Errorf("session.ttl_max_ms must be > 0")
+	}
+	if c.Scan.SampleVideos <= 0 {
+		return fmt.Errorf("scan.sample_videos must be > 0")
+	}
+	if c.Match.WaitCap <= 0 {
+		return fmt.Errorf("match.wait_cap must be > 0")
+	}
+	if c.Match.SynopsisLimit <= 0 {
+		return fmt.Errorf("match.synopsis_limit must be > 0")
+	}
 	if c.Match.MinScore <= 0 {
 		return fmt.Errorf("match.min_score must be > 0")
 	}
@@ -243,6 +280,9 @@ func Validate(c Config) error {
 	}
 	if err := validateExp("match.cooldown", c.Match.Cooldown); err != nil {
 		return err
+	}
+	if len(wordList(c.Match.PlotStop)) == 0 {
+		return fmt.Errorf("match.plot_stop is empty")
 	}
 	if c.Group.SeqThreshold <= 0 || c.Group.SeqThreshold > 1 {
 		return fmt.Errorf("group.seq_threshold must be in (0, 1]")
@@ -277,6 +317,18 @@ func validateExp(name string, r ExpRange) error {
 
 func (c Config) IngestSampleRows() int {
 	return c.Ingest.SampleRows
+}
+
+func (c Config) SampleVideos() int {
+	return c.Scan.SampleVideos
+}
+
+func (c Config) WaitCap() int {
+	return c.Match.WaitCap
+}
+
+func (c Config) SynopsisLimit() int {
+	return c.Match.SynopsisLimit
 }
 
 func (c Config) SeqThreshold() float64 {
@@ -344,6 +396,10 @@ func (c Config) MatchSoloScore() float64 {
 
 func (c Config) MatchMinHits() int {
 	return c.Match.MinHits
+}
+
+func (c Config) PlotStop() map[string]struct{} {
+	return wordSet(c.Match.PlotStop)
 }
 
 func (c Config) MatchCooldownFails() int {

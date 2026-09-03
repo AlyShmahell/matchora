@@ -14,7 +14,7 @@ import (
 )
 
 func TestWaitLogConcurrentStartEnd(t *testing.T) {
-	log := &WaitLog{}
+	log := NewWaitLog(500)
 	var wg sync.WaitGroup
 	n := 40
 	wg.Add(n)
@@ -68,7 +68,7 @@ func TestRunWithReportsRunningProvider(t *testing.T) {
 			},
 		},
 	}
-	log := &WaitLog{}
+	log := NewWaitLog(500)
 	done := make(chan []Job, 1)
 	go func() {
 		done <- RunWith(context.Background(), cfg, []Job{{ID: "a", Title: "Girls"}}, log)
@@ -126,7 +126,7 @@ func TestFetchSkipsProviderPace(t *testing.T) {
 	if err := paceProvider(context.Background(), "tvmaze", 5000); err != nil {
 		t.Fatal(err)
 	}
-	log := &WaitLog{}
+	log := NewWaitLog(500)
 	ctx := WithReporter(context.Background(), log)
 	ctx = WithJob(ctx, Job{ID: "a", Title: "Girls"})
 	start := time.Now()
@@ -152,7 +152,7 @@ func TestFetchReportsPoster(t *testing.T) {
 		_, _ = w.Write([]byte("jpeg"))
 	}))
 	t.Cleanup(srv.Close)
-	log := &WaitLog{}
+	log := NewWaitLog(500)
 	ctx := WithReporter(context.Background(), log)
 	ctx = WithJob(ctx, Job{ID: "a", Title: "Girls"})
 	cfg := config.Config{HTTP: config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 1000}}
@@ -181,7 +181,7 @@ func TestFillCatalogReportsWait(t *testing.T) {
 		HTTP:      config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 1000},
 		Providers: map[string]config.Provider{"tvmaze": tvmazeCatalogSpec(srv.URL)},
 	}
-	log := &WaitLog{}
+	log := NewWaitLog(500)
 	cand := Candidate{Provider: "tvmaze", ID: "139", Title: "Girls"}
 	job := Job{ID: "a", Title: "Girls", Status: "matched", Match: &cand}
 	ctx := WithReporter(context.Background(), log)

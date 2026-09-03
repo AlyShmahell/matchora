@@ -118,12 +118,57 @@ func TestLoadShareYAML(t *testing.T) {
 	if cfg.SeqThreshold() != 0.72 {
 		t.Fatalf("threshold=%v", cfg.SeqThreshold())
 	}
+	tl := cfg.Providers["tvmaze"].Titles
+	if tl == nil || tl.Max != 3 || tl.URL != "{base}/shows/{id}/akas" || tl.Fields["title"] != "name" {
+		t.Fatalf("tvmaze titles=%+v", tl)
+	}
 }
 
 func TestLoadMissingExtras(t *testing.T) {
 	_, err := loadOverlayErr(t, "group:\n  extras: []\n")
 	if err == nil || !strings.Contains(err.Error(), "group.extras is empty") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestLoadTunables(t *testing.T) {
+	cfg := loadOverlay(t, "")
+	if cfg.SampleVideos() != 5 || cfg.WaitCap() != 500 || cfg.SynopsisLimit() != 4000 {
+		t.Fatalf("sample=%d wait=%d clip=%d", cfg.SampleVideos(), cfg.WaitCap(), cfg.SynopsisLimit())
+	}
+	if cfg.SessionTTLMax() != 24*time.Hour {
+		t.Fatalf("ttl_max=%s", cfg.SessionTTLMax())
+	}
+}
+
+func TestLoadMissingTunables(t *testing.T) {
+	cases := []struct {
+		overlay, want string
+	}{
+		{"scan:\n  sample_videos: 0\n", "scan.sample_videos must be > 0"},
+		{"match:\n  wait_cap: 0\n", "match.wait_cap must be > 0"},
+		{"match:\n  synopsis_limit: 0\n", "match.synopsis_limit must be > 0"},
+		{"session:\n  ttl_max_ms: 0\n", "session.ttl_max_ms must be > 0"},
+	}
+	for _, tc := range cases {
+		_, err := loadOverlayErr(t, tc.overlay)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("overlay %q err=%v", tc.overlay, err)
+		}
+	}
+}
+
+func TestLoadMissingPlotStop(t *testing.T) {
+	_, err := loadOverlayErr(t, "match:\n  plot_stop: []\n")
+	if err == nil || !strings.Contains(err.Error(), "match.plot_stop is empty") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestPlotStopHelper(t *testing.T) {
+	cfg := loadOverlay(t, "")
+	if _, ok := cfg.PlotStop()["the"]; !ok {
+		t.Fatalf("plot_stop=%v", cfg.PlotStop())
 	}
 }
 
@@ -347,17 +392,18 @@ func TestReadOverlayEmpty(t *testing.T) {
 }
 
 func TestSessionTTLClamp(t *testing.T) {
-	if (Config{}).SessionTTL() != SessionTTLMax {
-		t.Fatalf("default=%s", Config{}.SessionTTL())
+	max := 24 * time.Hour
+	if (Config{Session: Session{TTLMaxMS: 86400000}}).SessionTTL() != max {
+		t.Fatalf("default=%s", Config{Session: Session{TTLMaxMS: 86400000}}.SessionTTL())
 	}
-	if (Config{Session: Session{TTLMS: -1}}).SessionTTL() != SessionTTLMax {
+	if (Config{Session: Session{TTLMS: -1, TTLMaxMS: 86400000}}).SessionTTL() != max {
 		t.Fatal("negative")
 	}
-	got := (Config{Session: Session{TTLMS: 3600000}}).SessionTTL()
+	got := (Config{Session: Session{TTLMS: 3600000, TTLMaxMS: 86400000}}).SessionTTL()
 	if got != time.Hour {
 		t.Fatalf("hour=%s", got)
 	}
-	if (Config{Session: Session{TTLMS: 200000000}}).SessionTTL() != SessionTTLMax {
+	if (Config{Session: Session{TTLMS: 200000000, TTLMaxMS: 86400000}}).SessionTTL() != max {
 		t.Fatal("clamp")
 	}
 }

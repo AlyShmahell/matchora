@@ -60,7 +60,7 @@ var qualityExtra = map[string]struct{}{
 }
 
 type groupedRow struct {
-	title, year, path string
+	title, year, path, parent string
 }
 
 type preprocessor struct {
@@ -96,7 +96,7 @@ func Group(cfg config.Config, root, child string) []Grouped {
 	rows := g.group(child)
 	out := make([]Grouped, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, Grouped{Cleaned: Cleaned{Title: r.title, Year: r.year}, Path: r.path})
+		out = append(out, Grouped{Cleaned: Cleaned{Title: r.title, Year: r.year}, Path: r.path, Parent: r.parent})
 	}
 	return out
 }
@@ -973,10 +973,17 @@ func (g *grouper) group(child string) []groupedRow {
 	if err != nil {
 		return nil
 	}
+	parent, _ := g.emit(root, years)
+	var rows []groupedRow
 	if !st.IsDir() {
-		return g.looseFile(child, root, years, g.libRel(child))
+		rows = g.looseFile(child, root, years, g.libRel(child))
+	} else {
+		rows = uniqueTitles(g.node(child, root, years, g.libRel(child)))
 	}
-	return uniqueTitles(g.node(child, root, years, g.libRel(child)))
+	for i := range rows {
+		rows[i].parent = parent
+	}
+	return rows
 }
 
 func (g *grouper) looseFile(path, root string, years map[string]bool, pathRel string) []groupedRow {

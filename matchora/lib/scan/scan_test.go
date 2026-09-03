@@ -30,7 +30,7 @@ func TestChildrenListsImmediateFilesAndFolderSubcontent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Children(root, root)
+	got, err := Children(root, root, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestChildrenSeasonFolderHasParent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s1, "Frieren S01E01.mkv"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Children(root, show)
+	got, err := Children(root, show, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestChildrenDoesNotSplitByFileCount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := Children(root, root)
+	got, err := Children(root, root, 5)
 	if err != nil {
 		t.Fatal(err)
 	}

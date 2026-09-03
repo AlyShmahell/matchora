@@ -9,8 +9,6 @@ import (
 	matchfs "github.com/alyshmahell/matchora/lib/fs"
 )
 
-const sampleVideos = 5
-
 type Item struct {
 	Raw    string
 	Path   string
@@ -106,7 +104,7 @@ func collectVideos(root, dir string, out *[]string) error {
 	return nil
 }
 
-func Children(root, target string) ([]Child, error) {
+func Children(root, target string, sampleVideos int) ([]Child, error) {
 	root, target, err := resolve(root, target)
 	if err != nil {
 		return nil, err
@@ -127,7 +125,7 @@ func Children(root, target string) ([]Child, error) {
 			continue
 		}
 		if st.IsDir() {
-			listing, n := formatDir(e.Name(), p, parent)
+			listing, n := formatDir(e.Name(), p, parent, sampleVideos)
 			out = append(out, Child{Path: p, Listing: listing, Videos: n})
 			continue
 		}
@@ -151,7 +149,7 @@ func formatFile(name, parent string) string {
 	return b.String()
 }
 
-func formatDir(name, path, parent string) (string, int) {
+func formatDir(name, path, parent string, sampleVideos int) (string, int) {
 	var b strings.Builder
 	b.WriteString("Folder: ")
 	b.WriteString(name)

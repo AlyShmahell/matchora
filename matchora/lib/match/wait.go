@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-const waitCap = 500
-
 type Reporter interface {
 	WaitStart(jobID, title, name string) string
 	WaitEnd(id, err string)
@@ -27,7 +25,12 @@ type Wait struct {
 type WaitLog struct {
 	mu    sync.Mutex
 	seq   int
+	cap   int
 	items []Wait
+}
+
+func NewWaitLog(cap int) *WaitLog {
+	return &WaitLog{cap: cap}
 }
 
 func (l *WaitLog) WaitStart(jobID, title, name string) string {
@@ -46,8 +49,8 @@ func (l *WaitLog) WaitStart(jobID, title, name string) string {
 		Since: time.Now().UTC(),
 	}
 	l.items = append([]Wait{w}, l.items...)
-	if len(l.items) > waitCap {
-		l.items = l.items[:waitCap]
+	if l.cap > 0 && len(l.items) > l.cap {
+		l.items = l.items[:l.cap]
 	}
 	return id
 }

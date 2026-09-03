@@ -178,7 +178,7 @@ func TestFetchCatalogEmptyTitleBecomesSeasonN(t *testing.T) {
 	list := &config.CatalogList{
 		Fields: map[string]string{"id": "id", "number": "number", "title": "name"},
 	}
-	s, ok := seasonFrom(config.Provider{}, list, item)
+	s, ok := seasonFrom(config.Provider{}, list, item, 4000)
 	if !ok {
 		t.Fatal("expected season")
 	}

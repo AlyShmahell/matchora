@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -657,7 +658,7 @@ func TestCandidateFromSynopsisPoster(t *testing.T) {
 		},
 		Year: "prefix4",
 	}
-	c, ok := candidateFrom("tvmaze", spec, item)
+	c, ok := candidateFrom("tvmaze", spec, item, 4000)
 	if !ok {
 		t.Fatal("expected candidate")
 	}
@@ -691,7 +692,7 @@ func TestCandidateFromPosterPrefix(t *testing.T) {
 		URLPrefix:    "https://www.themoviedb.org/movie/",
 		PosterPrefix: "https://image.tmdb.org/t/p/w185",
 	}
-	c, ok := candidateFrom("tmdb", spec, item)
+	c, ok := candidateFrom("tmdb", spec, item, 4000)
 	if !ok {
 		t.Fatal("expected candidate")
 	}
@@ -705,7 +706,7 @@ func TestCandidateFromPosterPrefix(t *testing.T) {
 		t.Fatalf("poster=%q", c.Poster)
 	}
 	empty := map[string]any{"id": 1, "title": "No Poster"}
-	c, ok = candidateFrom("tmdb", spec, empty)
+	c, ok = candidateFrom("tmdb", spec, empty, 4000)
 	if !ok {
 		t.Fatal("expected candidate")
 	}
@@ -731,11 +732,182 @@ func TestCandidateFromExtraAttrs(t *testing.T) {
 			"language": "show.language",
 		},
 	}
-	c, ok := candidateFrom("tvmaze", spec, item)
+	c, ok := candidateFrom("tvmaze", spec, item, 4000)
 	if !ok {
 		t.Fatal("expected candidate")
 	}
 	if c.Attrs["kind"] != "Animation" || c.Attrs["language"] != "Japanese" {
 		t.Fatalf("attrs=%v", c.Attrs)
+	}
+}
+
+func TestCandidateFromStaticAttrs(t *testing.T) {
+	item := map[string]any{"mal_id": 1, "title": "Erased", "title_english": "Erased"}
+	spec := config.Provider{
+		Fields: map[string]string{"id": "mal_id", "title": "title", "title_en": "title_english"},
+		Attrs:  map[string]string{"language": "Japanese", "kind": "Animation"},
+	}
+	c, ok := candidateFrom("jikan", spec, item, 4000)
+	if !ok {
+		t.Fatal("expected candidate")
+	}
+	if c.Attrs["title_en"] != "Erased" || c.Attrs["language"] != "Japanese" || c.Attrs["kind"] != "Animation" {
+		t.Fatalf("attrs=%v", c.Attrs)
+	}
+}
+
+func titlesTestCfg(base string) config.Config {
+	return config.Config{
+		HTTP:  config.HTTP{TimeoutMS: 5000, Retries: 1, ProviderTimeoutMS: 1000},
+		Match: config.Match{PlotStop: testPlotStop, SynopsisLimit: 4000},
+		Providers: map[string]config.Provider{
+			"tvmaze": {
+				Base:   base,
+				URL:    "{base}/search/shows",
+				Query:  map[string]string{"q": "{title}"},
+				Items:  "$",
+				Fields: map[string]string{"id": "show.id", "title": "show.name", "year": "show.premiered", "url": "show.url"},
+				Titles: &config.Titles{
+					URL:    "{base}/shows/{id}/akas",
+					Items:  "$",
+					Fields: map[string]string{"title": "name"},
+					Max:    3,
+				},
+			},
+		},
+	}
+}
+
+func TestSearchProviderHydratesFilteredTitles(t *testing.T) {
+	var (
+		akaMu  sync.Mutex
+		akaIDs []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/search"):
+			_ = json.NewEncoder(w).Encode([]any{
+				map[string]any{"show": map[string]any{"id": 1, "name": "Boku Dake ga Inai Machi", "premiered": "2016", "url": "http://t"}},
+				map[string]any{"show": map[string]any{"id": 2, "name": "Erased: I'll Do Anything to Become a Librarian!", "premiered": "2019", "url": "http://t2"}},
+				map[string]any{"show": map[string]any{"id": 3, "name": "Foo", "premiered": "2000", "url": "http://t3"}},
+				map[string]any{"show": map[string]any{"id": 4, "name": "Bar", "premiered": "2001", "url": "http://t4"}},
+				map[string]any{"show": map[string]any{"id": 5, "name": "Baz", "premiered": "2002", "url": "http://t5"}},
+			})
+		case strings.HasPrefix(r.URL.Path, "/shows/"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/shows/"), "/akas")
+			akaMu.Lock()
+			akaIDs = append(akaIDs, id)
+			akaMu.Unlock()
+			if id == "1" {
+				_ = json.NewEncoder(w).Encode([]any{
+					map[string]any{"name": "Erased"},
+					map[string]any{"name": "Boku Dake ga Inai Machi"},
+					map[string]any{"name": "Unrelated Decoy Show"},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]any{})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cfg := titlesTestCfg(srv.URL)
+	cands, err := searchProviders(context.Background(), cfg, newHTTP(cfg), Job{Title: "Erased"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(akaIDs, ","); got != "1,3,4" {
+		t.Fatalf("aka ids=%q want 1,3,4 (subset skip + max 3)", got)
+	}
+	var erased Candidate
+	for _, c := range cands {
+		if c.ID == "1" {
+			erased = c
+		}
+		if c.ID == "2" && c.Attrs["title_aka"] != "" {
+			t.Fatalf("subset should skip akas: %+v", c.Attrs)
+		}
+		if c.ID == "5" && c.Attrs["title_aka"] != "" {
+			t.Fatalf("max should skip 4th weak hit: %+v", c.Attrs)
+		}
+	}
+	if erased.Attrs["title_aka"] != "Erased" {
+		t.Fatalf("aka=%v", erased.Attrs)
+	}
+	if erased.Attrs["title_aka_2"] != "" {
+		t.Fatalf("decoy kept: %v", erased.Attrs)
+	}
+	ranked := rank(cfg, Job{Title: "Erased"}, []Candidate{erased})
+	if ranked[0].Jaccard != 1 {
+		t.Fatalf("jaccard=%v", ranked[0].Jaccard)
+	}
+}
+
+func TestSearchProviderSkipsBookwormSubset(t *testing.T) {
+	var aka atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/search"):
+			_ = json.NewEncoder(w).Encode([]any{
+				map[string]any{"show": map[string]any{"id": 10, "name": "Ascendance of a Bookworm: I'll Do Anything to Become a Librarian!", "premiered": "2019", "url": "http://t"}},
+				map[string]any{"show": map[string]any{"id": 11, "name": "Unrelated", "premiered": "2000", "url": "http://t2"}},
+			})
+		case strings.HasPrefix(r.URL.Path, "/shows/"):
+			aka.Add(1)
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/shows/"), "/akas")
+			if id == "10" {
+				t.Errorf("subset candidate fetched /akas")
+			}
+			_ = json.NewEncoder(w).Encode([]any{})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cfg := titlesTestCfg(srv.URL)
+	cands, err := searchProviders(context.Background(), cfg, newHTTP(cfg), Job{Title: "Ascendance of a Bookworm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aka.Load() != 1 {
+		t.Fatalf("aka fetches=%d want 1", aka.Load())
+	}
+	for _, c := range cands {
+		if c.ID == "10" && c.Attrs["title_aka"] != "" {
+			t.Fatalf("bookworm subset hydrated: %+v", c.Attrs)
+		}
+	}
+}
+
+func TestSearchProviderTitlesFailureIsNonFatal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/search") {
+			_ = json.NewEncoder(w).Encode([]any{
+				map[string]any{"show": map[string]any{"id": 1, "name": "Boku Dake ga Inai Machi", "premiered": "2016", "url": "http://t"}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	cfg := titlesTestCfg(srv.URL)
+	cands, err := searchProviders(context.Background(), cfg, newHTTP(cfg), Job{Title: "Erased"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 || cands[0].Title != "Boku Dake ga Inai Machi" {
+		t.Fatalf("cands=%+v", cands)
+	}
+	if cands[0].Attrs["title_aka"] != "" {
+		t.Fatalf("failed aka should not set title: %v", cands[0].Attrs)
+	}
+}
+
+func TestClipTextLimit(t *testing.T) {
+	long := strings.Repeat("x", 4001)
+	got := clipText(long, 4000)
+	if n := len([]rune(got)); n != 4000 {
+		t.Fatalf("runes=%d", n)
 	}
 }
